@@ -8,7 +8,7 @@ trait WasmContract {
 }
 
 fn main() -> anyhow::Result<()> {
-    let mut contract = WasmContract::load_file("wasm_string_test.wasm")?;
+    let mut contract = WasmContract::load_file("contracts/target/wasm32-wasi/release/wasm_string_test.wasm")?;
     let r: Record = Record::from_base64(&contract.run1());
 
     println!{"{:#?}", r};
