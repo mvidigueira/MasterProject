@@ -1,21 +1,38 @@
-extern crate serde;
 extern crate bincode;
 extern crate base64;
 
-use serde::{Serialize, Deserialize};
+use std::collections::HashMap;
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct Record {
-    pub k: String,
-    pub v: Vec<u8>,
+pub trait WasiSerializable {
+    fn serialize_wasi(&self) -> String;
 }
 
-impl Record {
-    pub fn to_base64(&self) -> String {
-        base64::encode(&bincode::serialize(&self).unwrap())
-    }
+pub trait WasiDeserializable {
+    fn deserialize_wasi(enc: &str) -> Self;
+}
 
-    pub fn from_base64(s: &str) -> Record {
-        bincode::deserialize(&base64::decode(s).unwrap()).unwrap()
+pub type Ledger = HashMap<String, Vec<u8>>;
+
+impl WasiSerializable for Ledger {
+    fn serialize_wasi(&self) -> String {
+        base64::encode(&bincode::serialize(self).unwrap())
     }
+}
+
+impl WasiDeserializable for Ledger {
+    fn deserialize_wasi(enc: &str) -> Ledger {
+        bincode::deserialize(&base64::decode(enc).unwrap()).unwrap()
+    }
+}
+
+pub fn extract_result(enc: &str) -> Result<Ledger, String> {
+    bincode::deserialize(&base64::decode(enc).unwrap()).unwrap()
+}
+
+pub fn create_result(r: Result<Ledger, String>) -> String {
+    base64::encode(&bincode::serialize(&r).unwrap())
+}
+
+pub fn serialize_args<T: serde::Serialize>(args: &T) -> String {
+    base64::encode(&bincode::serialize(args).unwrap())
 }

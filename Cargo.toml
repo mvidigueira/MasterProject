@@ -11,3 +11,5 @@ common = {path="common"}
 #wasm-bindgen = "=0.2.54"
 wasmtime-rust = "=0.11.0"
 anyhow = "1.0.26"
+bincode = "1.2.1"
+base64 = "0.11.0"

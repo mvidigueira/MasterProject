@@ -197,6 +197,8 @@ checksum = "8ae7167f0bbffd7fac2b12da0fa1f834c1d84671a1ae3c93ac8bde2e97179c39"
 name = "wasm_string_test"
 version = "0.1.0"
 dependencies = [
+ "base64",
+ "bincode",
  "common",
  "wasm-bindgen",
 ]

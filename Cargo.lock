@@ -891,6 +891,8 @@ name = "rules_parsing"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64",
+ "bincode",
  "common",
  "wasmtime-rust",
 ]
