@@ -1,3 +1,3 @@
-/target
-/contracts/target
-/common/target
+rules_playtest/target
+rules_playtest/contracts/target
+rules_playtest/common/target
