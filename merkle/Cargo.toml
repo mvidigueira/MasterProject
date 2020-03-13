@@ -7,3 +7,7 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+drop = { path = "/home/manuel/Documents/M4/rust_playground/drop" }
+serde = { version = "1.0", features = ["derive", "rc"] }
+sha2 = "0.8.1"
+bincode = "1.2.1"
