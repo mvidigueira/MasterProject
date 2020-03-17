@@ -186,14 +186,7 @@ where
     }
 
     fn remove_left(&mut self) -> Option<Rc<Node<K,V>>> {
-        match &mut self.left {
-            None => None,
-            Some(a) => {
-                let ret = Some(Rc::clone(a));
-                self.left = None;
-                ret
-            }
-        }
+        self.left.take()
     }
 
     fn right(&self) -> Option<&Rc<Node<K, V>>> {
@@ -201,14 +194,7 @@ where
     }
 
     fn remove_right(&mut self) -> Option<Rc<Node<K,V>>> {
-        match &mut self.right {
-            None => None,
-            Some(a) => {
-                let ret = Some(Rc::clone(a));
-                self.right = None;
-                ret
-            }
-        }
+        self.right.take()
     }
 }
 
