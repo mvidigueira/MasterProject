@@ -7,7 +7,7 @@ where
     K: Serialize + Eq,
     V: Serialize,
 {
-    root: Node<K, V>,
+    _root: Node<K, V>,
 }
 
 impl<K, V> Tree<K, V>
