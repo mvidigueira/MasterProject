@@ -1,9 +1,14 @@
+// REMOVE THIS LATER!
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 
 use drop::crypto::Digest;
 use drop::crypto;
+use std::fmt;
 
 // bits: 0 -> most significant, 255 -> least significant
+#[inline]
 fn bit(arr: &[u8; 32], index: u8) -> bool {
     let byte = arr[(index/8) as usize];
     let sub_index: u8 =  1 << (7 - (index % 8));
@@ -36,6 +41,11 @@ where
     K: Serialize + Eq,
     V: Serialize,
 {
+    /// Returns the `Node<K,V>` as a `Leaf<K,V>` node.
+    ///
+    /// # Panics
+    /// 
+    /// Panics if the underlying variant is not a `Leaf`.
     fn leaf(self) -> Leaf<K, V> {
         match self {
             Node::Leaf(n) => n,
@@ -43,6 +53,11 @@ where
         }
     }
 
+    /// Returns the `Node<K,V>` as an `Internal<K,V>` node.
+    ///
+    /// # Panics
+    /// 
+    /// Panics if the underlying variant is not a `Internal`.
     fn internal(self) -> Internal<K, V> {
         match self {
             Node::Internal(n) => n,
@@ -50,6 +65,11 @@ where
         }
     }
 
+    /// Returns the `Node<K,V>` as a `Placeholder` node.
+    ///
+    /// # Panics
+    /// 
+    /// Panics if the underlying variant is not a `Internal`.
     fn placeholder(self) -> Placeholder {
         match self {
             Node::Placeholder(n) => n,
@@ -57,13 +77,52 @@ where
         }
     }
 
-    fn add_internal(self, k: K, v: V, k_digest: &Digest, depth: u32) -> Self {
+    pub fn get(&self, k: K, depth: u32) -> Result<&V, &'static str> {
+        let d = crypto::hash(&k).unwrap();
+        self.get_internal(k, depth, &d)
+    }
+
+    /// Tries to return the value associated to key k from the underlying tree.
+    /// k_digest must be the digest of k using `crypto::hash()`.
+    /// depth is the depth of the current node in the tree (between 0 and 255).
+    ///
+    /// # Errors
+    /// 
+    /// If the key association does not exist, or the key association is not present
+    /// in the local structure, returns an error.
+    /// ```
+    fn get_internal(&self, k: K, depth: u32, k_digest: &Digest) -> Result<&V, &'static str> {
         match self {
-            Node::Internal(n) => n.add_internal(k, v, k_digest, depth).into(),
-            Node::Placeholder(_) => unimplemented!("Unspecified behaviour for 'add' on placeholder"),
-            Node::Leaf(n) => n.add_internal(k, v, k_digest, depth).into(),
+            Node::Internal(n) => n.get_internal(k, depth, k_digest),
+            Node::Placeholder(_) => Err("key association not present in local tree (possibly behind placeholder)"),
+            Node::Leaf(n) => n.get_internal(k),
         }
     }
+
+    pub fn insert(self, k: K, v: V, depth: u32) -> Self {
+        let d = crypto::hash(&k).unwrap();
+        self.insert_internal(k, v, depth, &d)
+    }
+
+    /// Adds the key value (k, v) association to the underlying tree.
+    /// k_digest must be the digest of k using `crypto::hash()`.
+    /// depth is the depth of the current node in the tree (between 0 and 255).
+    ///
+    /// # Panics
+    /// 
+    /// Behaviour is currently unspecified for the `Placeholder` variant,
+    /// panicking with unimplemented!(...).
+    /// Behaviour is currently unspecified if the key (k) is already present,
+    /// panicking with unimplemented!(...)
+    fn insert_internal(self, k: K, v: V, depth: u32, k_digest: &Digest) -> Self {
+        match self {
+            Node::Internal(n) => n.insert_internal(k, v, depth, k_digest).into(),
+            Node::Placeholder(_) => unimplemented!("Unspecified behaviour for 'add' on placeholder"),
+            Node::Leaf(n) => n.insert_internal(k, v, depth, k_digest).into(),
+        }
+    }
+
+    //fn remove_internal()
 }
 
 impl<K, V> Hashable for Node<K, V>
@@ -147,11 +206,19 @@ where
         &self.v
     }
 
-    fn add_internal(mut self, k: K, v: V, k_digest: &Digest, depth: u32) -> Internal<K,V> {
+    fn get_internal(&self, k: K) -> Result<&V, &'static str> {
         if self.k == k {
-            unimplemented!("Key value association already present");
+            Ok(self.value())
+        } else {
+            Err("key association does not exist")
+        }
+    }
+
+    fn insert_internal(self, k: K, v: V, depth: u32, k_digest: &Digest) -> Internal<K,V> {
+        if self.k == k {
+            unimplemented!("key value association already present");
         } else if depth == 255 {
-            panic!("Hash collision detected!");
+            panic!("hash collision detected!");
         }
 
         let my_k = crypto::hash(&self.k).unwrap();
@@ -162,7 +229,7 @@ where
             Internal::new(Some(self.into()), None)
         };
         
-        i.add_internal(k, v, k_digest, depth)
+        i.insert_internal(k, v, depth, k_digest)
     }
 }
 
@@ -240,16 +307,30 @@ where
         self.right.take()
     }
 
-    fn add_internal(mut self, k: K, v: V, k_digest: &Digest, depth: u32) -> Internal<K,V> {
+    fn get_internal(&self, k: K, depth: u32, k_digest: &Digest) -> Result<&V, &'static str> {
+        if bit(k_digest.as_ref(), depth as u8) {
+            match &self.right {
+                Some(n) => n.as_ref().get_internal(k, depth + 1, k_digest),
+                None => Err("key association does not exist"),
+            }
+        } else {
+            match &self.left {
+                Some(n) => n.as_ref().get_internal(k, depth + 1, k_digest),
+                None => Err("key association does not exist"),
+            }
+        }
+    }
+
+    fn insert_internal(mut self, k: K, v: V, depth: u32, k_digest: &Digest) -> Internal<K,V> {
         if bit(k_digest.as_ref(), depth as u8) {
             self.right = match self.right {
                 None => Some(Box::new(Leaf::new(k, v).into())),
-                Some(n) => Some(Box::new(n.add_internal(k, v, k_digest, depth + 1))),
+                Some(n) => Some(Box::new(n.insert_internal(k, v, depth + 1, k_digest))),
             }
         } else {
             self.left = match self.left {
                 None => Some(Box::new(Leaf::new(k, v).into())),
-                Some(n) => Some(Box::new(n.add_internal(k, v, k_digest, depth + 1))),
+                Some(n) => Some(Box::new(n.insert_internal(k, v, depth + 1, k_digest))),
             }
         };
 
@@ -258,9 +339,16 @@ where
 }
 
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize)]
 pub struct Placeholder {
     d: Digest,
+}
+
+impl fmt::Debug for Placeholder {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        // Customize so only `x` and `y` are denoted.
+        write!(f, "Placeholder {{{}}}:", self.d)
+    }
 }
 
 impl Placeholder {
@@ -290,8 +378,31 @@ where
     K: Serialize + Eq,
     V: Serialize,
 {
-    fn from(l: Internal<K, V>) -> Self {
-        Placeholder { d: l.hash() }
+    fn from(i: Internal<K, V>) -> Self {
+        Placeholder { d: i.hash() }
+    }
+}
+
+impl<K, V> From<&Node<K, V>> for Placeholder
+where
+    K: Serialize + Eq,
+    V: Serialize,
+{
+    fn from(n: &Node<K, V>) -> Self {
+        Placeholder{ d: n.hash() }
+    }
+}
+
+impl<K, V> From<Node<K, V>> for Placeholder
+where
+    K: Serialize + Eq,
+    V: Serialize,
+{
+    fn from(n: Node<K, V>) -> Self {
+        match n {
+            Node::Placeholder(n) => n,
+            a => a.into(),
+        }
     }
 }
 
@@ -349,6 +460,22 @@ mod tests {
         assert_ne!(base.hash(), r3.hash());
     }
 
+    #[test]
+    fn leaf_get_normal() {
+        let base = Leaf::new("Alice".to_string(), 0x00);
+
+        let v = base.get_internal("Alice".to_string()).unwrap();
+        assert_eq!(*v, 0x00);
+    }
+
+    #[test]
+    #[should_panic(expected = "key association does not exist")]
+    fn leaf_get_err() {
+        let base = Leaf::new("Alice".to_string(), 0x00);
+
+        base.get_internal("Bob".to_string()).unwrap();
+    }
+
     // Initially there is only one leaf which key hash starts with b1...
     // We add (k,v) such that hash(k) starts with b0...
     // The addition should therefore return an Internal node with children:
@@ -370,7 +497,7 @@ mod tests {
         assert_eq!(bit(leaf_d.as_ref(), 0), true);
 
         let depth = 0;
-        let i = leaf.add_internal(k, 0x01, &digest, depth);
+        let i = leaf.insert_internal(k, 0x01, depth, &digest);
 
         println!("{:?}", i);
 
@@ -409,7 +536,7 @@ mod tests {
         assert_eq!(digest, h2d!("82464cbbaaf39d3d5f924f44c09feccd921816359abf54a4dcb97aa54ef94c04"));
 
         let depth = 0;
-        let i = leaf.add_internal(k, 0x01, &digest, depth);
+        let i = leaf.insert_internal(k, 0x01, depth, &digest);
 
         if let Some(_) = i.left() {
             panic!("left of depth 0 internal node should be empty");
@@ -491,6 +618,47 @@ mod tests {
         assert_eq!(p1.hash(), p2.hash());
     }
 
+    #[test]
+    fn internal_get_normal() {
+        let i: Node<_,_> = Internal::new(None, None).into();
+        let i = i.insert("Alice".to_string(), 0x01, 0);
+        let i = i.insert("Bob".to_string(), 0x02, 0);
+
+        let v = i.get("Alice".to_string(), 0).unwrap();
+        assert_eq!(*v, 0x01);
+
+        let v = i.get("Bob".to_string(), 0).unwrap();
+        assert_eq!(*v, 0x02);
+    }
+
+    #[test]
+    #[should_panic(expected = "key association does not exist")]
+    fn internal_get_err_non_existant() {
+        let i: Node<_,_> = Internal::new(None, None).into();
+        let i = i.insert("Alice".to_string(), 0x01, 0);
+        let i = i.insert("Bob".to_string(), 0x02, 0);
+
+        i.get("Charlie".to_string(), 0).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "key association not present in local tree")]
+    fn internal_get_err_behind_placeholder() {
+        let i: Node<_,_> = Internal::new(None, None).into();
+        let i = i.insert("Bob".to_string(), 0x01, 0);                   // left
+        let i = i.insert("Aaron".to_string(), 0x02, 0);                 // right, left
+        let mut i = i.insert("Dave".to_string(), 0x03, 0).internal();   // right, right
+
+        let ph: Placeholder = i.right().unwrap().into();
+        i.right = Some(Box::new(ph.into()));
+        let i: Node<_,_> = i.into();
+
+        let v = i.get("Bob".to_string(), 0).unwrap();
+        assert_eq!(*v, 0x01);
+
+        i.get("Aaron".to_string(), 0).unwrap();
+    }
+
     // Initially there is only one internal node holding a leaf which key hash starts with b1...
     // We add (k,v) such that hash(k) starts with b0...
     // The addition should therefore return nothing.
@@ -510,8 +678,8 @@ mod tests {
         assert_eq!(digest, h2d!("63688fc040203caed5265b7c08f5a5627ba260c2004ed1241fa859dd02160f54"));
 
         let depth = 0;
-        let i = Internal::new(None, Some(leaf.into()));
-        let i = i.add_internal(k, 0x01, &digest, depth);
+        let i: Node<_,_> = Internal::new(None, Some(leaf.into())).into();
+        let i = i.insert(k, 0x01, depth).internal();
 
         if let Node::Leaf(l) = i.left().expect("missing left node") {
             assert_eq!(l.k, "Bob".to_string());
@@ -549,8 +717,8 @@ mod tests {
         assert_eq!(digest, h2d!("82464cbbaaf39d3d5f924f44c09feccd921816359abf54a4dcb97aa54ef94c04"));
 
         let depth = 0;
-        let i = Internal::new(None, Some(leaf.into()));
-        let i: Internal<_,_> = i.add_internal(k, 0x01, &digest, depth);
+        let i: Node<_,_> = Internal::new(None, Some(leaf.into())).into();
+        let i = i.insert(k, 0x01, depth).internal();
 
         if let Some(Node::Internal(i)) = i.right() {
             if let Node::Leaf(l) = i.left().expect("missing left node of depth 1 internal node") {

@@ -1,25 +1,28 @@
-use super::node::Node;
-use serde::ser::Serialize;
+use crate::node::Node;
+
+use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
 
+#[derive(Serialize, Deserialize, Default)]
 pub struct Tree<K, V>
 where
     K: Serialize + Eq,
     V: Serialize,
 {
-    _root: Node<K, V>,
+    root: Option<Node<K, V>>,
 }
+
 
 impl<K, V> Tree<K, V>
 where
     K: Serialize + Eq,
     V: Serialize,
 {
-    fn _new() -> Tree<K, V> {
-        unimplemented!();
+    pub fn new() -> Self {
+        Tree{ root: None }
     }
 
-    fn _get<Q: ?Sized>(&self, _k: &Q) -> Option<&V>
+    pub fn get<Q: ?Sized>(&self, _k: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
         Q: Serialize + Eq,
@@ -27,11 +30,11 @@ where
         unimplemented!();
     }
 
-    fn _insert(&mut self, _k: K, _v: V) -> Option<V> {
+    pub fn insert(&mut self, _k: K, _v: V) -> Option<V> {
         unimplemented!();
     }
 
-    fn _remove<Q: ?Sized>(&mut self, _k: &Q) -> Option<&V> {
+    pub fn remove<Q: ?Sized>(&mut self, _k: &Q) -> Option<&V> {
         unimplemented!();
     }
 }

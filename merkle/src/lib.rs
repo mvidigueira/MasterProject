@@ -1,2 +1,2 @@
-mod node;
 pub mod tree;
+mod node;
