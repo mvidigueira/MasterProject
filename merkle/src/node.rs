@@ -1,17 +1,17 @@
-// REMOVE THIS LATER!
+// TODO: REMOVE THIS LATER!
 #![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 
-use drop::crypto::Digest;
 use drop::crypto;
+use drop::crypto::Digest;
 use std::fmt;
 
 // bits: 0 -> most significant, 255 -> least significant
 #[inline]
 fn bit(arr: &[u8; 32], index: u8) -> bool {
-    let byte = arr[(index/8) as usize];
-    let sub_index: u8 =  1 << (7 - (index % 8));
+    let byte = arr[(index / 8) as usize];
+    let sub_index: u8 = 1 << (7 - (index % 8));
     (byte & sub_index) > 0
 }
 
@@ -36,15 +36,36 @@ where
     Leaf(Leaf<K, V>),
 }
 
-impl<K, V> Node<K, V> 
+impl<K, V> Node<K, V>
 where
     K: Serialize + Eq,
     V: Serialize,
 {
+    fn is_leaf(&self) -> bool {
+        match self {
+            Node::Leaf(_) => true,
+            _ => false,
+        }
+    }
+
+    fn is_internal(&self) -> bool {
+        match self {
+            Node::Internal(_) => true,
+            _ => false,
+        }
+    }
+
+    fn is_placeholder(&self) -> bool {
+        match self {
+            Node::Placeholder(_) => true,
+            _ => false,
+        }
+    }
+
     /// Returns the `Node<K,V>` as a `Leaf<K,V>` node.
     ///
     /// # Panics
-    /// 
+    ///
     /// Panics if the underlying variant is not a `Leaf`.
     fn leaf(self) -> Leaf<K, V> {
         match self {
@@ -56,8 +77,8 @@ where
     /// Returns the `Node<K,V>` as an `Internal<K,V>` node.
     ///
     /// # Panics
-    /// 
-    /// Panics if the underlying variant is not a `Internal`.
+    ///
+    /// Panics if the underlying variant is not an `Internal`.
     fn internal(self) -> Internal<K, V> {
         match self {
             Node::Internal(n) => n,
@@ -68,8 +89,8 @@ where
     /// Returns the `Node<K,V>` as a `Placeholder` node.
     ///
     /// # Panics
-    /// 
-    /// Panics if the underlying variant is not a `Internal`.
+    ///
+    /// Panics if the underlying variant is not a `Placeholder`.
     fn placeholder(self) -> Placeholder {
         match self {
             Node::Placeholder(n) => n,
@@ -87,14 +108,21 @@ where
     /// depth is the depth of the current node in the tree (between 0 and 255).
     ///
     /// # Errors
-    /// 
+    ///
     /// If the key association does not exist, or the key association is not present
     /// in the local structure, returns an error.
     /// ```
-    fn get_internal(&self, k: K, depth: u32, k_digest: &Digest) -> Result<&V, &'static str> {
+    fn get_internal(
+        &self,
+        k: K,
+        depth: u32,
+        k_digest: &Digest,
+    ) -> Result<&V, &'static str> {
         match self {
             Node::Internal(n) => n.get_internal(k, depth, k_digest),
-            Node::Placeholder(_) => Err("key association not present in local tree (possibly behind placeholder)"),
+            Node::Placeholder(_) => {
+                Err("key association not present in local tree (possibly behind placeholder)")
+            }
             Node::Leaf(n) => n.get_internal(k),
         }
     }
@@ -109,20 +137,53 @@ where
     /// depth is the depth of the current node in the tree (between 0 and 255).
     ///
     /// # Panics
-    /// 
+    ///
     /// Behaviour is currently unspecified for the `Placeholder` variant,
     /// panicking with unimplemented!(...).
     /// Behaviour is currently unspecified if the key (k) is already present,
     /// panicking with unimplemented!(...)
-    fn insert_internal(self, k: K, v: V, depth: u32, k_digest: &Digest) -> Self {
+    fn insert_internal(
+        self,
+        k: K,
+        v: V,
+        depth: u32,
+        k_digest: &Digest,
+    ) -> Self {
         match self {
-            Node::Internal(n) => n.insert_internal(k, v, depth, k_digest).into(),
-            Node::Placeholder(_) => unimplemented!("Unspecified behaviour for 'add' on placeholder"),
+            Node::Internal(n) => {
+                n.insert_internal(k, v, depth, k_digest).into()
+            }
+            Node::Placeholder(_) => {
+                unimplemented!("Unspecified behaviour for 'add' on placeholder")
+            }
             Node::Leaf(n) => n.insert_internal(k, v, depth, k_digest).into(),
         }
     }
 
-    //fn remove_internal()
+    pub fn remove(self, k: K, depth: u32) -> (Option<V>, Option<Self>) {
+        let d = crypto::hash(&k).unwrap();
+        self.remove_internal(k, depth, &d)
+    }
+
+    fn remove_internal(
+        self,
+        k: K,
+        depth: u32,
+        k_digest: &Digest,
+    ) -> (Option<V>, Option<Self>) {
+        match self {
+            Node::Internal(i) =>  match i.remove_internal(k, depth, k_digest) {
+                (v, a) => (v, Some(a)),
+            },
+            Node::Placeholder(_) => {
+                unimplemented!("Unspecified behaviour for 'add' on placeholder")
+            }
+            Node::Leaf(l) => match l.remove_internal(k) {
+                (v @ _, Some(l)) => (v, Some(l.into())),
+                (v @ _, None) => (v, None),
+            },
+        }
+    }
 }
 
 impl<K, V> Hashable for Node<K, V>
@@ -214,7 +275,13 @@ where
         }
     }
 
-    fn insert_internal(self, k: K, v: V, depth: u32, k_digest: &Digest) -> Internal<K,V> {
+    fn insert_internal(
+        self,
+        k: K,
+        v: V,
+        depth: u32,
+        k_digest: &Digest,
+    ) -> Internal<K, V> {
         if self.k == k {
             unimplemented!("key value association already present");
         } else if depth == 255 {
@@ -222,14 +289,22 @@ where
         }
 
         let my_k = crypto::hash(&self.k).unwrap();
-        
+
         let i = if bit(my_k.as_ref(), depth as u8) {
             Internal::new(None, Some(self.into()))
         } else {
             Internal::new(Some(self.into()), None)
         };
-        
+
         i.insert_internal(k, v, depth, k_digest)
+    }
+
+    fn remove_internal(self, k: K) -> (Option<V>, Option<Self>) {
+        if self.k == k {
+            (Some(self.v), None)
+        } else {
+            (None, Some(self)) // consider refactoring 
+        }
     }
 }
 
@@ -281,33 +356,38 @@ where
             Some(n) => Some(Box::new(n)),
             None => None,
         };
-        let i = Internal{left, right};
+        let i = Internal { left, right };
         i
     }
 
     fn left(&self) -> Option<&Node<K, V>> {
         match &self.left {
             None => None,
-            Some(b) => Some(b.as_ref())
+            Some(b) => Some(b.as_ref()),
         }
     }
 
-    fn remove_left(&mut self) -> Option<Box<Node<K,V>>> {
+    fn remove_left(&mut self) -> Option<Box<Node<K, V>>> {
         self.left.take()
     }
 
     fn right(&self) -> Option<&Node<K, V>> {
         match &self.right {
             None => None,
-            Some(b) => Some(b.as_ref())
+            Some(b) => Some(b.as_ref()),
         }
     }
 
-    fn remove_right(&mut self) -> Option<Box<Node<K,V>>> {
+    fn remove_right(&mut self) -> Option<Box<Node<K, V>>> {
         self.right.take()
     }
 
-    fn get_internal(&self, k: K, depth: u32, k_digest: &Digest) -> Result<&V, &'static str> {
+    fn get_internal(
+        &self,
+        k: K,
+        depth: u32,
+        k_digest: &Digest,
+    ) -> Result<&V, &'static str> {
         if bit(k_digest.as_ref(), depth as u8) {
             match &self.right {
                 Some(n) => n.as_ref().get_internal(k, depth + 1, k_digest),
@@ -321,23 +401,77 @@ where
         }
     }
 
-    fn insert_internal(mut self, k: K, v: V, depth: u32, k_digest: &Digest) -> Internal<K,V> {
+    fn insert_internal(
+        mut self,
+        k: K,
+        v: V,
+        depth: u32,
+        k_digest: &Digest,
+    ) -> Self {
         if bit(k_digest.as_ref(), depth as u8) {
             self.right = match self.right {
                 None => Some(Box::new(Leaf::new(k, v).into())),
-                Some(n) => Some(Box::new(n.insert_internal(k, v, depth + 1, k_digest))),
+                Some(n) => {
+                    Some(Box::new(n.insert_internal(k, v, depth + 1, k_digest)))
+                }
             }
         } else {
             self.left = match self.left {
                 None => Some(Box::new(Leaf::new(k, v).into())),
-                Some(n) => Some(Box::new(n.insert_internal(k, v, depth + 1, k_digest))),
+                Some(n) => {
+                    Some(Box::new(n.insert_internal(k, v, depth + 1, k_digest)))
+                }
             }
         };
 
         self
     }
-}
 
+    fn remove_internal(
+        mut self,
+        k: K,
+        depth: u32,
+        k_digest: &Digest,
+    ) -> (Option<V>, Node<K,V>) {
+
+        // NOT YET VERIFIED TO BE WORKING
+
+        if bit(k_digest.as_ref(), depth as u8) {
+            if self.right.is_none() {
+                return (None, self.into());
+            }
+            let r = self.right.unwrap().remove_internal(k, depth + 1, k_digest);
+            self.right = match r.1 {
+                Some(a) => Some(Box::new(a)),
+                None => None,
+            };
+
+            match (&self.left, &self.right) {
+                (None, None) => panic!("Impossible"),
+                (Some(n), None) if !n.is_internal() => return (r.0, *self.left.unwrap()),
+                (None, Some(n)) if !n.is_internal() => return (r.0, *self.right.unwrap()),
+                _ => (r.0, self.into()),
+            }
+        } else {
+            if self.left.is_none() {
+                return (None, self.into());
+            }
+            let r = self.left.unwrap().remove_internal(k, depth + 1, k_digest);
+            self.left = match r.1 {
+                Some(a) => Some(Box::new(a)),
+                None => None,
+            };
+
+            match (&self.left, &self.right) {
+                (None, None) => panic!("Impossible"),
+                (Some(n), None) if !n.is_internal() => return (r.0, *self.left.unwrap()),
+                (None, Some(n)) if !n.is_internal() => return (r.0, *self.right.unwrap()),
+                _ => (r.0, self.into()),
+            }
+        }
+
+    }
+}
 
 #[derive(Serialize, Deserialize)]
 pub struct Placeholder {
@@ -389,7 +523,7 @@ where
     V: Serialize,
 {
     fn from(n: &Node<K, V>) -> Self {
-        Placeholder{ d: n.hash() }
+        Placeholder { d: n.hash() }
     }
 }
 
@@ -428,14 +562,12 @@ mod tests {
         //     let sub_index: u8 =  2^(7-(index % 8));
         //     (byte & sub_index) > 0
         // }
-
-
     }
 
     macro_rules! h2d {
         ($data:expr) => {
             Digest::try_from($data).expect("failed to create digest")
-        }
+        };
     }
 
     #[test]
@@ -470,7 +602,7 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "key association does not exist")]
-    fn leaf_get_err() {
+    fn leaf_get_err_non_existant() {
         let base = Leaf::new("Alice".to_string(), 0x00);
 
         base.get_internal("Bob".to_string()).unwrap();
@@ -485,13 +617,19 @@ mod tests {
     fn leaf_add1() {
         let leaf_k = "left".to_string();
         let leaf_d = crypto::hash(&leaf_k).unwrap();
-        assert_eq!(leaf_d, h2d!("c8c3fff091d468a9c3d758eb79f31b0e9cef2718681b81ec693d0990a639962f"));
+        assert_eq!(
+            leaf_d,
+            h2d!("c8c3fff091d468a9c3d758eb79f31b0e9cef2718681b81ec693d0990a639962f")
+        );
 
         let leaf = Leaf::new(leaf_k, 0x00);
 
         let k = "Bob".to_string();
         let digest = crypto::hash(&k).unwrap();
-        assert_eq!(digest, h2d!("63688fc040203caed5265b7c08f5a5627ba260c2004ed1241fa859dd02160f54"));
+        assert_eq!(
+            digest,
+            h2d!("63688fc040203caed5265b7c08f5a5627ba260c2004ed1241fa859dd02160f54")
+        );
 
         assert_eq!(bit(digest.as_ref(), 0), false);
         assert_eq!(bit(leaf_d.as_ref(), 0), true);
@@ -527,13 +665,19 @@ mod tests {
     fn leaf_add2() {
         let leaf_k = "left".to_string();
         let leaf_d = crypto::hash(&leaf_k).unwrap();
-        assert_eq!(leaf_d, h2d!("c8c3fff091d468a9c3d758eb79f31b0e9cef2718681b81ec693d0990a639962f"));
+        assert_eq!(
+            leaf_d,
+            h2d!("c8c3fff091d468a9c3d758eb79f31b0e9cef2718681b81ec693d0990a639962f")
+        );
 
         let leaf = Leaf::new(leaf_k, 0x00);
 
         let k = "Aaron".to_string();
         let digest = crypto::hash(&k).unwrap();
-        assert_eq!(digest, h2d!("82464cbbaaf39d3d5f924f44c09feccd921816359abf54a4dcb97aa54ef94c04"));
+        assert_eq!(
+            digest,
+            h2d!("82464cbbaaf39d3d5f924f44c09feccd921816359abf54a4dcb97aa54ef94c04")
+        );
 
         let depth = 0;
         let i = leaf.insert_internal(k, 0x01, depth, &digest);
@@ -543,14 +687,20 @@ mod tests {
         }
 
         if let Some(Node::Internal(i)) = i.right() {
-            if let Node::Leaf(l) = i.left().expect("missing left node of depth 1 internal node") {
+            if let Node::Leaf(l) = i
+                .left()
+                .expect("missing left node of depth 1 internal node")
+            {
                 assert_eq!(l.k, "Aaron".to_string());
                 assert_eq!(l.v, 0x01);
             } else {
                 panic!("left node of depth 1 internal node not a leaf");
             }
 
-            if let Node::Leaf(r) = i.right().expect("missing right node of depth 1 internal node") {
+            if let Node::Leaf(r) = i
+                .right()
+                .expect("missing right node of depth 1 internal node")
+            {
                 assert_eq!(r.k, "left".to_string());
                 assert_eq!(r.v, 0x00);
             } else {
@@ -560,8 +710,31 @@ mod tests {
     }
 
     #[test]
+    fn leaf_remove_normal() {
+        let l: Node<_, _> = Leaf::new("Alice".to_string(), 0x01).into();
+        let v = l.remove("Alice".to_string(), 0);
+        assert_eq!(v.0, Some(0x01));
+        if let Some(_) = v.1 {
+            panic!("should return None for node");
+        }
+    }
+
+    #[test]
+    fn leaf_remove_non_existant() {
+        let l: Node<_, _> = Leaf::new("Alice".to_string(), 0x01).into();
+        let v = l.remove("Bob".to_string(), 0);
+        let l = v.1.unwrap().leaf();
+        assert_eq!(*l.key(), "Alice".to_string());
+        assert_eq!(*l.value(), 0x01);
+
+        if let Some(_) = v.0 {
+            panic!("should return None for value");
+        }
+    }
+
+    #[test]
     fn internal_constructor1() {
-        let left_r  = Leaf::new("left" , 0x00).into();
+        let left_r = Leaf::new("left", 0x00).into();
         let right_r = Leaf::new("right", 0x01).into();
         let i = Internal::new(Some(left_r), Some(right_r));
 
@@ -571,14 +744,14 @@ mod tests {
                 assert_eq!(*l.value(), 0x00);
                 assert_eq!(*r.key(), "right");
                 assert_eq!(*r.value(), 0x01);
-            },
+            }
             _ => panic!("one of the child nodes was not a leaf"),
         };
     }
 
     #[test]
     fn internal_constructor2() {
-        let left_r  = Leaf::new("left" , 0x00).into();
+        let left_r = Leaf::new("left", 0x00).into();
         let right_r = Leaf::new("right", 0x01).into();
         let i1 = Internal::new(Some(left_r), Some(right_r));
         let i2 = Internal::new(Some(i1.into()), None);
@@ -591,10 +764,10 @@ mod tests {
                         assert_eq!(*l.value(), 0x00);
                         assert_eq!(*r.key(), "right");
                         assert_eq!(*r.value(), 0x01);
-                    },
+                    }
                     _ => panic!("one of the child nodes of the left internal node was not a leaf"),
                 };
-            },
+            }
             (_, Some(_)) => panic!("right child not None"),
             _ => panic!("wrong cast for children"),
         }
@@ -602,13 +775,13 @@ mod tests {
 
     #[test]
     fn internal_hash_correctness1() {
-        let left_r  = Leaf::new("left" , 0x00).into();
+        let left_r = Leaf::new("left", 0x00).into();
         let right_r = Leaf::new("right", 0x01).into();
         let i = Internal::new(Some(left_r), Some(right_r));
         let h1 = i.hash();
         let p1 = Internal::new(Some(i.into()), None);
 
-        let left_r  = Leaf::new("left" , 0x00).into();
+        let left_r = Leaf::new("left", 0x00).into();
         let right_r = Leaf::new("right", 0x01).into();
         let i = Internal::new(Some(left_r), Some(right_r));
         let h2 = i.hash();
@@ -620,7 +793,7 @@ mod tests {
 
     #[test]
     fn internal_get_normal() {
-        let i: Node<_,_> = Internal::new(None, None).into();
+        let i: Node<_, _> = Internal::new(None, None).into();
         let i = i.insert("Alice".to_string(), 0x01, 0);
         let i = i.insert("Bob".to_string(), 0x02, 0);
 
@@ -634,7 +807,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "key association does not exist")]
     fn internal_get_err_non_existant() {
-        let i: Node<_,_> = Internal::new(None, None).into();
+        let i: Node<_, _> = Internal::new(None, None).into();
         let i = i.insert("Alice".to_string(), 0x01, 0);
         let i = i.insert("Bob".to_string(), 0x02, 0);
 
@@ -644,14 +817,14 @@ mod tests {
     #[test]
     #[should_panic(expected = "key association not present in local tree")]
     fn internal_get_err_behind_placeholder() {
-        let i: Node<_,_> = Internal::new(None, None).into();
-        let i = i.insert("Bob".to_string(), 0x01, 0);                   // left
-        let i = i.insert("Aaron".to_string(), 0x02, 0);                 // right, left
-        let mut i = i.insert("Dave".to_string(), 0x03, 0).internal();   // right, right
+        let i: Node<_, _> = Internal::new(None, None).into();
+        let i = i.insert("Bob".to_string(), 0x01, 0); // left
+        let i = i.insert("Aaron".to_string(), 0x02, 0); // right, left
+        let mut i = i.insert("Dave".to_string(), 0x03, 0).internal(); // right, right
 
         let ph: Placeholder = i.right().unwrap().into();
         i.right = Some(Box::new(ph.into()));
-        let i: Node<_,_> = i.into();
+        let i: Node<_, _> = i.into();
 
         let v = i.get("Bob".to_string(), 0).unwrap();
         assert_eq!(*v, 0x01);
@@ -669,16 +842,22 @@ mod tests {
     fn internal_add1() {
         let leaf_k = "left".to_string();
         let leaf_d = crypto::hash(&leaf_k).unwrap();
-        assert_eq!(leaf_d, h2d!("c8c3fff091d468a9c3d758eb79f31b0e9cef2718681b81ec693d0990a639962f"));
+        assert_eq!(
+            leaf_d,
+            h2d!("c8c3fff091d468a9c3d758eb79f31b0e9cef2718681b81ec693d0990a639962f")
+        );
 
         let leaf = Leaf::new(leaf_k, 0x00);
 
         let k = "Bob".to_string();
         let digest = crypto::hash(&k).unwrap();
-        assert_eq!(digest, h2d!("63688fc040203caed5265b7c08f5a5627ba260c2004ed1241fa859dd02160f54"));
+        assert_eq!(
+            digest,
+            h2d!("63688fc040203caed5265b7c08f5a5627ba260c2004ed1241fa859dd02160f54")
+        );
 
         let depth = 0;
-        let i: Node<_,_> = Internal::new(None, Some(leaf.into())).into();
+        let i: Node<_, _> = Internal::new(None, Some(leaf.into())).into();
         let i = i.insert(k, 0x01, depth).internal();
 
         if let Node::Leaf(l) = i.left().expect("missing left node") {
@@ -708,27 +887,39 @@ mod tests {
     fn internal_add2() {
         let leaf_k = "left".to_string();
         let leaf_d = crypto::hash(&leaf_k).unwrap();
-        assert_eq!(leaf_d, h2d!("c8c3fff091d468a9c3d758eb79f31b0e9cef2718681b81ec693d0990a639962f"));
+        assert_eq!(
+            leaf_d,
+            h2d!("c8c3fff091d468a9c3d758eb79f31b0e9cef2718681b81ec693d0990a639962f")
+        );
 
         let leaf = Leaf::new(leaf_k, 0x00);
 
         let k = "Aaron".to_string();
         let digest = crypto::hash(&k).unwrap();
-        assert_eq!(digest, h2d!("82464cbbaaf39d3d5f924f44c09feccd921816359abf54a4dcb97aa54ef94c04"));
+        assert_eq!(
+            digest,
+            h2d!("82464cbbaaf39d3d5f924f44c09feccd921816359abf54a4dcb97aa54ef94c04")
+        );
 
         let depth = 0;
-        let i: Node<_,_> = Internal::new(None, Some(leaf.into())).into();
+        let i: Node<_, _> = Internal::new(None, Some(leaf.into())).into();
         let i = i.insert(k, 0x01, depth).internal();
 
         if let Some(Node::Internal(i)) = i.right() {
-            if let Node::Leaf(l) = i.left().expect("missing left node of depth 1 internal node") {
+            if let Node::Leaf(l) = i
+                .left()
+                .expect("missing left node of depth 1 internal node")
+            {
                 assert_eq!(l.k, "Aaron".to_string());
                 assert_eq!(l.v, 0x01);
             } else {
                 panic!("left node of depth 1 internal node not a leaf");
             }
 
-            if let Node::Leaf(r) = i.right().expect("missing right node of depth 1 internal node") {
+            if let Node::Leaf(r) = i
+                .right()
+                .expect("missing right node of depth 1 internal node")
+            {
                 assert_eq!(r.k, "left".to_string());
                 assert_eq!(r.v, 0x00);
             } else {
@@ -737,10 +928,128 @@ mod tests {
         }
     }
 
+    // Testing leaf return after remove.
+    #[test]
+    fn internal_remove_normal1() {
+        let i: Node<_, _> = Internal::new(None, None).into();
+        let i = i.insert("Bob".to_string(), 0x01, 0); // left
+        let i = i.insert("Aaron".to_string(), 0x02, 0); // right
+
+        let v = i.remove("Aaron".to_string(), 0);
+        assert_eq!(v.0, Some(0x02));
+        let i = v.1.unwrap();
+
+        if let Node::Leaf(n) = i {
+            assert_eq!(*n.key(), "Bob".to_string());
+            assert_eq!(*n.value(), 0x01);
+        } else {
+            panic!("node of depth 0 should be leaf");
+        }
+    }
+
+    // Testing internal node return (with 2 children) after remove.
+    #[test]
+    fn internal_remove_normal2() {
+        let i: Node<_, _> = Internal::new(None, None).into();
+        let i = i.insert("Bob".to_string(), 0x01, 0); // left
+        let i = i.insert("Aaron".to_string(), 0x02, 0); // right, left
+        let i = i.insert("Dave".to_string(), 0x03, 0); // right, right
+
+        let v = i.remove("Dave".to_string(), 0);
+        assert_eq!(v.0, Some(0x03));
+        let i = v.1.unwrap().internal();
+
+        if let Node::Leaf(n) = i.left().unwrap() {
+            assert_eq!(*n.key(), "Bob".to_string());
+            assert_eq!(*n.value(), 0x01);
+        } else {
+            panic!("left node of depth 1 should be leaf");
+        }
+
+        if let Node::Leaf(n) = i.right().unwrap() {
+            assert_eq!(*n.key(), "Aaron".to_string());
+            assert_eq!(*n.value(), 0x02);
+        } else {
+            panic!("right node of depth 1 should be leaf");
+        }
+    }
+
+    // Testing leaf return after cascade remove.
+    #[test]
+    fn internal_remove_normal3() {
+        let i: Node<_, _> = Internal::new(None, None).into();
+        let i = i.insert("Bob".to_string(), 0x02, 0); // left (x4), right
+        let i = i.insert("Charlie".to_string(), 0x03, 0); // left (x4), left
+
+        let v = i.remove("Charlie".to_string(), 0);
+        assert_eq!(v.0, Some(0x03));
+        let i = v.1.unwrap();
+
+        if let Node::Leaf(n) = i {
+            assert_eq!(*n.key(), "Bob".to_string());
+            assert_eq!(*n.value(), 0x02);
+        } else {
+            panic!("node of depth 0 should be leaf");
+        }
+    }
+
+    // Testing internal node return (with 2 children) after cascade remove.
+    #[test]
+    fn internal_remove_normal4() {
+        let i: Node<_, _> = Internal::new(None, None).into();
+        let i = i.insert("Aaron".to_string(), 0x01, 0); // right
+        let i = i.insert("Bob".to_string(), 0x02, 0); // left (x4), right
+        let i = i.insert("Charlie".to_string(), 0x03, 0); // left (x4), left
+
+        let v = i.remove("Charlie".to_string(), 0);
+        assert_eq!(v.0, Some(0x03));
+        let i = v.1.unwrap().internal();
+
+        if let Node::Leaf(n) = i.left().unwrap() {
+            assert_eq!(*n.key(), "Bob".to_string());
+            assert_eq!(*n.value(), 0x02);
+        } else {
+            panic!("left node of depth 1 should be leaf");
+        }
+
+        if let Node::Leaf(n) = i.right().unwrap() {
+            assert_eq!(*n.key(), "Aaron".to_string());
+            assert_eq!(*n.value(), 0x01);
+        } else {
+            panic!("right node of depth 1 should be leaf");
+        }
+    }
+
+    #[test]
+    fn internal_remove_err() {
+        let i: Node<_, _> = Internal::new(None, None).into();
+        let i = i.insert("Aaron".to_string(), 0x01, 0); // right
+        let i = i.insert("Bob".to_string(), 0x02, 0); // left (x4), right
+        let i = i.insert("Charlie".to_string(), 0x03, 0); // left (x4), left
+
+        let v = i.remove("Charlie".to_string(), 0);
+        assert_eq!(v.0, Some(0x03));
+        let i = v.1.unwrap().internal();
+
+        if let Node::Leaf(n) = i.left().unwrap() {
+            assert_eq!(*n.key(), "Bob".to_string());
+            assert_eq!(*n.value(), 0x02);
+        } else {
+            panic!("left node of depth 1 should be leaf")
+        }
+
+        if let Node::Leaf(n) = i.right().unwrap() {
+            assert_eq!(*n.key(), "Aaron".to_string());
+            assert_eq!(*n.value(), 0x01);
+        } else {
+            panic!("right node of depth 1 should be leaf")
+        }
+    }
+
     macro_rules! test_hash {
         ($data:expr) => {
             crypto::hash(&($data)).expect("failed to hash data")
-        }
+        };
     }
 
     #[test]
