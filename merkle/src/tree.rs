@@ -1,5 +1,5 @@
-use crate::node::Node;
 use crate::node::Leaf;
+use crate::node::Node;
 
 use serde::{Deserialize, Serialize};
 
@@ -34,7 +34,7 @@ where
             None => {
                 self.root = Some(Leaf::new(k, v).into());
             }
-            Some(n) => { 
+            Some(n) => {
                 self.root = Some(n.insert(k, v, 0));
             }
         };
