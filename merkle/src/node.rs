@@ -154,7 +154,7 @@ where
                 n.insert_internal(k, v, depth, k_digest).into()
             }
             Node::Placeholder(_) => {
-                unimplemented!("Unspecified behaviour for 'add' on placeholder")
+                unimplemented!("Unspecified behaviour for 'insert' on placeholder")
             }
             Node::Leaf(n) => n.insert_internal(k, v, depth, k_digest).into(),
         }
@@ -172,11 +172,11 @@ where
         k_digest: &Digest,
     ) -> (Option<V>, Option<Self>) {
         match self {
-            Node::Internal(i) =>  match i.remove_internal(k, depth, k_digest) {
+            Node::Internal(i) => match i.remove_internal(k, depth, k_digest) {
                 (v, a) => (v, Some(a)),
             },
             Node::Placeholder(_) => {
-                unimplemented!("Unspecified behaviour for 'add' on placeholder")
+                unimplemented!("Unspecified behaviour for 'remove' on placeholder")
             }
             Node::Leaf(l) => match l.remove_internal(k) {
                 (v @ _, Some(l)) => (v, Some(l.into())),
@@ -303,7 +303,7 @@ where
         if self.k == k {
             (Some(self.v), None)
         } else {
-            (None, Some(self)) // consider refactoring 
+            (None, Some(self)) // consider refactoring (return an error)
         }
     }
 }
@@ -432,8 +432,7 @@ where
         k: K,
         depth: u32,
         k_digest: &Digest,
-    ) -> (Option<V>, Node<K,V>) {
-
+    ) -> (Option<V>, Node<K, V>) {
         // NOT YET VERIFIED TO BE WORKING
 
         if bit(k_digest.as_ref(), depth as u8) {
@@ -448,8 +447,12 @@ where
 
             match (&self.left, &self.right) {
                 (None, None) => panic!("Impossible"),
-                (Some(n), None) if !n.is_internal() => return (r.0, *self.left.unwrap()),
-                (None, Some(n)) if !n.is_internal() => return (r.0, *self.right.unwrap()),
+                (Some(n), None) if !n.is_internal() => {
+                    return (r.0, *self.left.unwrap())
+                }
+                (None, Some(n)) if !n.is_internal() => {
+                    return (r.0, *self.right.unwrap())
+                }
                 _ => (r.0, self.into()),
             }
         } else {
@@ -464,12 +467,15 @@ where
 
             match (&self.left, &self.right) {
                 (None, None) => panic!("Impossible"),
-                (Some(n), None) if !n.is_internal() => return (r.0, *self.left.unwrap()),
-                (None, Some(n)) if !n.is_internal() => return (r.0, *self.right.unwrap()),
+                (Some(n), None) if !n.is_internal() => {
+                    return (r.0, *self.left.unwrap())
+                }
+                (None, Some(n)) if !n.is_internal() => {
+                    return (r.0, *self.right.unwrap())
+                }
                 _ => (r.0, self.into()),
             }
         }
-
     }
 }
 
@@ -1077,5 +1083,14 @@ mod tests {
 
         let ph: Placeholder = i.into();
         assert_eq!(ph.d, hash);
+    }
+
+    #[test]
+    fn serialization() {
+        let i: Node<_, _> = Internal::new(None, None).into();
+        let i = i.insert("Bob".to_string(), 0x02, 0); // left (x4), right
+        let i = i.insert("Charlie".to_string(), 0x03, 0); // left (x4), left
+
+        unimplemented!();
     }
 }
