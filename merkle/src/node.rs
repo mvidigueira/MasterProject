@@ -3,8 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use drop::crypto;
-use drop::crypto::Digest;
+use drop::crypto::{self, Digest};
 use std::fmt;
 
 // bits: 0 -> most significant, 255 -> least significant
@@ -25,7 +24,7 @@ impl Hashable for String {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
 pub enum Node<K, V>
 where
     K: Serialize + Eq,
@@ -67,7 +66,19 @@ where
     /// # Panics
     ///
     /// Panics if the underlying variant is not a `Leaf`.
-    fn leaf(self) -> Leaf<K, V> {
+    pub fn leaf(self) -> Leaf<K, V> {
+        match self {
+            Node::Leaf(n) => n,
+            _ => panic!("not a leaf node"),
+        }
+    }
+
+    /// Returns the `&Node<K,V>` as a `&Leaf<K,V>` node.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the underlying variant is not a `Leaf`.
+    pub fn leaf_ref(&self) -> &Leaf<K, V> {
         match self {
             Node::Leaf(n) => n,
             _ => panic!("not a leaf node"),
@@ -79,7 +90,19 @@ where
     /// # Panics
     ///
     /// Panics if the underlying variant is not an `Internal`.
-    fn internal(self) -> Internal<K, V> {
+    pub fn internal(self) -> Internal<K, V> {
+        match self {
+            Node::Internal(n) => n,
+            _ => panic!("not an internal node"),
+        }
+    }
+
+    /// Returns the `&Node<K,V>` as an `&Internal<K,V>` node.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the underlying variant is not an `Internal`.
+    pub fn internal_ref(&self) -> &Internal<K, V> {
         match self {
             Node::Internal(n) => n,
             _ => panic!("not an internal node"),
@@ -91,7 +114,19 @@ where
     /// # Panics
     ///
     /// Panics if the underlying variant is not a `Placeholder`.
-    fn placeholder(self) -> Placeholder {
+    pub fn placeholder(self) -> Placeholder {
+        match self {
+            Node::Placeholder(n) => n,
+            _ => panic!("not a placeholder node"),
+        }
+    }
+
+    /// Returns the `&Node<K,V>` as a `&Placeholder` node.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the underlying variant is not a `Placeholder`.
+    pub fn placeholder_ref(&self) -> &Placeholder {
         match self {
             Node::Placeholder(n) => n,
             _ => panic!("not a placeholder node"),
@@ -153,9 +188,9 @@ where
             Node::Internal(n) => {
                 n.insert_internal(k, v, depth, k_digest).into()
             }
-            Node::Placeholder(_) => {
-                unimplemented!("Unspecified behaviour for 'insert' on placeholder")
-            }
+            Node::Placeholder(_) => unimplemented!(
+                "Unspecified behaviour for 'insert' on placeholder"
+            ),
             Node::Leaf(n) => n.insert_internal(k, v, depth, k_digest).into(),
         }
     }
@@ -175,9 +210,9 @@ where
             Node::Internal(i) => match i.remove_internal(k, depth, k_digest) {
                 (v, a) => (v, Some(a)),
             },
-            Node::Placeholder(_) => {
-                unimplemented!("Unspecified behaviour for 'remove' on placeholder")
-            }
+            Node::Placeholder(_) => unimplemented!(
+                "Unspecified behaviour for 'remove' on placeholder"
+            ),
             Node::Leaf(l) => match l.remove_internal(k) {
                 (v @ _, Some(l)) => (v, Some(l.into())),
                 (v @ _, None) => (v, None),
@@ -230,7 +265,7 @@ where
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Eq, PartialEq, Debug, Clone)]
 pub struct Leaf<K, V>
 where
     K: Serialize + Eq,
@@ -308,7 +343,7 @@ where
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
 pub struct Internal<K, V>
 where
     K: Serialize + Eq,
@@ -360,26 +395,18 @@ where
         i
     }
 
-    fn left(&self) -> Option<&Node<K, V>> {
+    pub fn left(&self) -> Option<&Node<K, V>> {
         match &self.left {
             None => None,
             Some(b) => Some(b.as_ref()),
         }
     }
 
-    fn remove_left(&mut self) -> Option<Box<Node<K, V>>> {
-        self.left.take()
-    }
-
-    fn right(&self) -> Option<&Node<K, V>> {
+    pub fn right(&self) -> Option<&Node<K, V>> {
         match &self.right {
             None => None,
             Some(b) => Some(b.as_ref()),
         }
-    }
-
-    fn remove_right(&mut self) -> Option<Box<Node<K, V>>> {
-        self.right.take()
     }
 
     fn get_internal(
@@ -477,7 +504,7 @@ where
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy)]
+#[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Copy)]
 pub struct Placeholder {
     d: Digest,
 }
@@ -632,8 +659,6 @@ mod tests {
 
         let depth = 0;
         let i = leaf.insert_internal(k, 0x01, depth, &digest);
-
-        println!("{:?}", i);
 
         if let Node::Leaf(l) = i.left().expect("missing left node") {
             assert_eq!(l.k, "Bob");
@@ -1077,8 +1102,8 @@ mod tests {
 
     #[test]
     fn ser_de() {
-        let i: Node<_, _> = Leaf::new("Bob", 0x02).into();  // left (x4), right
-        let i = i.insert("Charlie", 0x03, 0);               // left (x4), left
+        let i: Node<_, _> = Leaf::new("Bob", 0x02).into(); // left (x4), right
+        let i = i.insert("Charlie", 0x03, 0); // left (x4), left
 
         extern crate bincode;
 
