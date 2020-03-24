@@ -8,7 +8,7 @@ use std::fmt;
 
 // bits: 0 -> most significant, 255 -> least significant
 #[inline]
-fn bit(arr: &[u8; 32], index: u8) -> bool {
+pub fn bit(arr: &[u8; 32], index: u8) -> bool {
     let byte = arr[(index / 8) as usize];
     let sub_index: u8 = 1 << (7 - (index % 8));
     (byte & sub_index) > 0
@@ -27,8 +27,8 @@ impl Hashable for String {
 #[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
 pub enum Node<K, V>
 where
-    K: Serialize + Eq,
-    V: Serialize,
+    K: Serialize + Copy + Eq,
+    V: Serialize + Copy,
 {
     Internal(Internal<K, V>),
     Placeholder(Placeholder),
@@ -37,8 +37,8 @@ where
 
 impl<K, V> Node<K, V>
 where
-    K: Serialize + Eq,
-    V: Serialize,
+    K: Serialize + Copy + Eq,
+    V: Serialize + Copy,
 {
     fn is_leaf(&self) -> bool {
         match self {
@@ -223,8 +223,8 @@ where
 
 impl<K, V> Hashable for Node<K, V>
 where
-    K: Serialize + Eq,
-    V: Serialize,
+    K: Serialize + Copy + Eq,
+    V: Serialize + Copy,
 {
     fn hash(&self) -> Digest {
         match self {
@@ -237,8 +237,8 @@ where
 
 impl<K, V> From<Leaf<K, V>> for Node<K, V>
 where
-    K: Serialize + Eq,
-    V: Serialize,
+    K: Serialize + Copy + Eq,
+    V: Serialize + Copy,
 {
     fn from(l: Leaf<K, V>) -> Self {
         Node::Leaf(l)
@@ -247,8 +247,8 @@ where
 
 impl<K, V> From<Internal<K, V>> for Node<K, V>
 where
-    K: Serialize + Eq,
-    V: Serialize,
+    K: Serialize + Copy + Eq,
+    V: Serialize + Copy,
 {
     fn from(i: Internal<K, V>) -> Self {
         Node::Internal(i)
@@ -257,15 +257,15 @@ where
 
 impl<K, V> From<Placeholder> for Node<K, V>
 where
-    K: Serialize + Eq,
-    V: Serialize,
+    K: Serialize + Copy + Eq,
+    V: Serialize + Copy,
 {
     fn from(ph: Placeholder) -> Self {
         Node::Placeholder(ph)
     }
 }
 
-#[derive(Serialize, Deserialize, Eq, PartialEq, Debug, Clone)]
+#[derive(Serialize, Deserialize, Eq, PartialEq, Debug, Copy, Clone)]
 pub struct Leaf<K, V>
 where
     K: Serialize + Eq,
@@ -277,8 +277,8 @@ where
 
 impl<K, V> Hashable for Leaf<K, V>
 where
-    K: Serialize + Eq,
-    V: Serialize,
+    K: Serialize + Copy + Eq,
+    V: Serialize + Copy,
 {
     fn hash(&self) -> Digest {
         crypto::hash(&self).unwrap()
@@ -287,8 +287,8 @@ where
 
 impl<K, V> Leaf<K, V>
 where
-    K: Serialize + Eq,
-    V: Serialize,
+    K: Serialize + Copy + Eq,
+    V: Serialize + Copy,
 {
     pub fn new(key: K, value: V) -> Self {
         Leaf { k: key, v: value }
@@ -346,8 +346,8 @@ where
 #[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
 pub struct Internal<K, V>
 where
-    K: Serialize + Eq,
-    V: Serialize,
+    K: Serialize + Copy + Eq,
+    V: Serialize + Copy,
 {
     left: Option<Box<Node<K, V>>>,
     right: Option<Box<Node<K, V>>>,
@@ -355,8 +355,8 @@ where
 
 impl<K, V> Hashable for Internal<K, V>
 where
-    K: Serialize + Eq,
-    V: Serialize,
+    K: Serialize + Copy + Eq,
+    V: Serialize + Copy,
 {
     fn hash(&self) -> Digest {
         if let (None, None) = (&self.left, &self.right) {
@@ -379,8 +379,8 @@ where
 
 impl<K, V> Internal<K, V>
 where
-    K: Serialize + Eq,
-    V: Serialize,
+    K: Serialize + Copy + Eq,
+    V: Serialize + Copy,
 {
     fn new(left: Option<Node<K, V>>, right: Option<Node<K, V>>) -> Self {
         let left = match left {
@@ -529,8 +529,8 @@ impl Hashable for Placeholder {
 
 impl<K, V> From<Leaf<K, V>> for Placeholder
 where
-    K: Serialize + Eq,
-    V: Serialize,
+    K: Serialize + Copy + Eq,
+    V: Serialize + Copy,
 {
     fn from(l: Leaf<K, V>) -> Self {
         Placeholder { d: l.hash() }
@@ -539,8 +539,8 @@ where
 
 impl<K, V> From<Internal<K, V>> for Placeholder
 where
-    K: Serialize + Eq,
-    V: Serialize,
+    K: Serialize + Copy + Eq,
+    V: Serialize + Copy,
 {
     fn from(i: Internal<K, V>) -> Self {
         Placeholder { d: i.hash() }
@@ -549,8 +549,8 @@ where
 
 impl<K, V> From<&Node<K, V>> for Placeholder
 where
-    K: Serialize + Eq,
-    V: Serialize,
+    K: Serialize + Copy + Eq,
+    V: Serialize + Copy,
 {
     fn from(n: &Node<K, V>) -> Self {
         Placeholder { d: n.hash() }
@@ -559,13 +559,103 @@ where
 
 impl<K, V> From<Node<K, V>> for Placeholder
 where
-    K: Serialize + Eq,
-    V: Serialize,
+    K: Serialize + Copy + Eq,
+    V: Serialize + Copy,
 {
     fn from(n: Node<K, V>) -> Self {
         match n {
             Node::Placeholder(n) => n,
             a => a.into(),
+        }
+    }
+}
+
+// MERKLE PROOFs
+
+impl<K, V> Node<K, V>
+where
+    K: Serialize + Copy + Eq,
+    V: Serialize + Copy,
+{
+    #![allow(dead_code)]
+    pub fn get_proof_single_internal(
+        &self,
+        key: K,
+        depth: u32,
+        k_digest: &Digest,
+    ) -> Result<Self, &'static str> {
+        match self {
+            Node::Internal(n) => match n.get_proof_single_internal(key, depth, k_digest) {
+                Ok(n) => Ok(n.into()),
+                Err(e) => Err(e),
+            },
+            Node::Placeholder(_) => {
+                Err("Unspecified behaviour for 'get_proof_single_internal' for Placeholder")
+            }
+            Node::Leaf(n) => match n.get_proof_single_internal(key) {
+                Ok(n) => Ok(n.into()),
+                Err(e) => Err(e),
+            },
+        }
+    }
+}
+
+impl<K, V> Leaf<K, V>
+where
+    K: Serialize + Copy + Eq,
+    V: Serialize + Copy,
+{
+    #![allow(dead_code)]
+    pub fn get_proof_single_internal(
+        &self,
+        key: K,
+    ) -> Result<Self, &'static str> {
+        if self.k == key {
+            Ok(self.clone())
+        } else {
+            Err("attempting to get proof for non existing key association")
+        }
+    }
+}
+
+impl<K, V> Internal<K, V>
+where
+    K: Serialize + Copy + Eq,
+    V: Serialize + Copy,
+{
+    #![allow(dead_code)]
+    pub fn get_proof_single_internal(
+        &self,
+        k: K,
+        depth: u32,
+        k_digest: &Digest,
+    ) -> Result<Self, &'static str> {
+        if bit(k_digest.as_ref(), depth as u8) {
+            let right = match &self.right {
+                Some(n) => match n.as_ref().get_proof_single_internal(k, depth + 1, k_digest) {
+                    Err(e) => { return Err(e); },
+                    Ok(n) => Some(n),
+                }
+                None => { return Err("attempting to get proof for non existing key association"); },
+            };
+            let left = match &self.left {
+                None => None,
+                Some(n) => Some(Placeholder::new(n.hash()).into()),
+            };
+            Ok(Internal::new(left, right))
+        } else {
+            let left = match &self.left {
+                Some(n) => match n.as_ref().get_proof_single_internal(k, depth + 1, k_digest) {
+                    Err(e) => { return Err(e); },
+                    Ok(n) => Some(n),
+                }
+                None => { return Err("attempting to get proof for non existing key association"); },
+            };
+            let right = match &self.right {
+                None => None,
+                Some(n) => Some(Placeholder::new(n.hash()).into()),
+            };
+            Ok(Internal::new(left, right))
         }
     }
 }
@@ -593,12 +683,76 @@ mod tests {
         };
     }
 
+    // CONSTRUCTOR TESTS
+
     #[test]
     fn leaf_constructor() {
         let l = Leaf::new("Test", 3);
         assert_eq!(l.k, "Test");
         assert_eq!(l.v, 3);
     }
+
+    #[test]
+    fn internal_constructor1() {
+        let left_r = Leaf::new("left", 0x00).into();
+        let right_r = Leaf::new("right", 0x01).into();
+        let i = Internal::new(Some(left_r), Some(right_r));
+
+        match (i.left.unwrap().as_ref(), i.right.unwrap().as_ref()) {
+            (Node::Leaf(l), Node::Leaf(r)) => {
+                assert_eq!(*l.key(), "left");
+                assert_eq!(*l.value(), 0x00);
+                assert_eq!(*r.key(), "right");
+                assert_eq!(*r.value(), 0x01);
+            }
+            _ => panic!("one of the child nodes was not a leaf"),
+        };
+    }
+
+    #[test]
+    fn internal_constructor2() {
+        let left_r = Leaf::new("left", 0x00).into();
+        let right_r = Leaf::new("right", 0x01).into();
+        let i1 = Internal::new(Some(left_r), Some(right_r));
+        let i2 = Internal::new(Some(i1.into()), None);
+
+        match (i2.left().unwrap(), i2.right()) {
+            (Node::Internal(i), None) => {
+                match (i.left().unwrap(), i.right().unwrap()) {
+                    (Node::Leaf(l), Node::Leaf(r)) => {
+                        assert_eq!(*l.key(), "left");
+                        assert_eq!(*l.value(), 0x00);
+                        assert_eq!(*r.key(), "right");
+                        assert_eq!(*r.value(), 0x01);
+                    }
+                    _ => panic!("one of the child nodes of the left internal node was not a leaf"),
+                };
+            }
+            (_, Some(_)) => panic!("right child not None"),
+            _ => panic!("wrong cast for children"),
+        }
+    }
+
+    #[test]
+    fn placeholder_from_leaf() {
+        let base = Leaf::new("", 0x00);
+        let hash = base.hash();
+
+        let ph: Placeholder = base.into();
+        assert_eq!(ph.d, hash);
+    }
+
+    #[test]
+    fn placeholder_from_internal() {
+        let base = Leaf::new("", 0x00);
+        let i = Internal::new(None, Some(base.into()));
+        let hash = i.hash();
+
+        let ph: Placeholder = i.into();
+        assert_eq!(ph.d, hash);
+    }
+
+    // HASH CORRECTNESS TESTS
 
     #[test]
     fn leaf_hash() {
@@ -616,6 +770,40 @@ mod tests {
     }
 
     #[test]
+    fn internal_hash_correctness1() {
+        let left_r = Leaf::new("left", 0x00).into();
+        let right_r = Leaf::new("right", 0x01).into();
+        let i = Internal::new(Some(left_r), Some(right_r));
+        let h1 = i.hash();
+        let p1 = Internal::new(Some(i.into()), None);
+
+        let left_r = Leaf::new("left", 0x00).into();
+        let right_r = Leaf::new("right", 0x01).into();
+        let i = Internal::new(Some(left_r), Some(right_r));
+        let h2 = i.hash();
+        let p2 = Internal::new(Some(i.into()), None);
+
+        assert_eq!(h1, h2);
+        assert_eq!(p1.hash(), p2.hash());
+    }
+
+    macro_rules! test_hash {
+        ($data:expr) => {
+            crypto::hash(&($data)).expect("failed to hash data")
+        };
+    }
+
+    #[test]
+    fn placeholder_constructor() {
+        let ph = Placeholder::new(test_hash!(0u32));
+
+        assert_eq!(ph.hash(), test_hash!(0u32));
+        assert_eq!(ph.d, test_hash!(0u32));
+    }
+
+    // GET TESTS
+
+    #[test]
     fn leaf_get_normal() {
         let base = Leaf::new("Alice", 0x00);
 
@@ -630,6 +818,49 @@ mod tests {
 
         base.get_internal("Bob").unwrap();
     }
+
+    #[test]
+    fn internal_get_normal() {
+        let i: Node<_, _> = Internal::new(None, None).into();
+        let i = i.insert("Alice", 0x01, 0);
+        let i = i.insert("Bob", 0x02, 0);
+
+        let v = i.get("Alice", 0).unwrap();
+        assert_eq!(*v, 0x01);
+
+        let v = i.get("Bob", 0).unwrap();
+        assert_eq!(*v, 0x02);
+    }
+
+    #[test]
+    #[should_panic(expected = "key association does not exist")]
+    fn internal_get_err_non_existant() {
+        let i: Node<_, _> = Internal::new(None, None).into();
+        let i = i.insert("Alice", 0x01, 0);
+        let i = i.insert("Bob", 0x02, 0);
+
+        i.get("Charlie", 0).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "key association not present in local tree")]
+    fn internal_get_err_behind_placeholder() {
+        let i: Node<_, _> = Internal::new(None, None).into();
+        let i = i.insert("Bob", 0x01, 0); // left
+        let i = i.insert("Aaron", 0x02, 0); // right, left
+        let mut i = i.insert("Dave", 0x03, 0).internal(); // right, right
+
+        let ph: Placeholder = i.right().unwrap().into();
+        i.right = Some(Box::new(ph.into()));
+        let i: Node<_, _> = i.into();
+
+        let v = i.get("Bob", 0).unwrap();
+        assert_eq!(*v, 0x01);
+
+        i.get("Aaron", 0).unwrap();
+    }
+
+    // INSERT TESTS
 
     // Initially there is only one leaf which key hash starts with b1...
     // We insert (k,v) such that hash(k) starts with b0...
@@ -730,128 +961,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn leaf_remove_normal() {
-        let l: Node<_, _> = Leaf::new("Alice", 0x01).into();
-        let v = l.remove("Alice", 0);
-        assert_eq!(v.0, Some(0x01));
-        if let Some(_) = v.1 {
-            panic!("should return None for node");
-        }
-    }
-
-    #[test]
-    fn leaf_remove_non_existant() {
-        let l: Node<_, _> = Leaf::new("Alice", 0x01).into();
-        let v = l.remove("Bob", 0);
-        let l = v.1.unwrap().leaf();
-        assert_eq!(*l.key(), "Alice");
-        assert_eq!(*l.value(), 0x01);
-
-        if let Some(_) = v.0 {
-            panic!("should return None for value");
-        }
-    }
-
-    #[test]
-    fn internal_constructor1() {
-        let left_r = Leaf::new("left", 0x00).into();
-        let right_r = Leaf::new("right", 0x01).into();
-        let i = Internal::new(Some(left_r), Some(right_r));
-
-        match (i.left.unwrap().as_ref(), i.right.unwrap().as_ref()) {
-            (Node::Leaf(l), Node::Leaf(r)) => {
-                assert_eq!(*l.key(), "left");
-                assert_eq!(*l.value(), 0x00);
-                assert_eq!(*r.key(), "right");
-                assert_eq!(*r.value(), 0x01);
-            }
-            _ => panic!("one of the child nodes was not a leaf"),
-        };
-    }
-
-    #[test]
-    fn internal_constructor2() {
-        let left_r = Leaf::new("left", 0x00).into();
-        let right_r = Leaf::new("right", 0x01).into();
-        let i1 = Internal::new(Some(left_r), Some(right_r));
-        let i2 = Internal::new(Some(i1.into()), None);
-
-        match (i2.left().unwrap(), i2.right()) {
-            (Node::Internal(i), None) => {
-                match (i.left().unwrap(), i.right().unwrap()) {
-                    (Node::Leaf(l), Node::Leaf(r)) => {
-                        assert_eq!(*l.key(), "left");
-                        assert_eq!(*l.value(), 0x00);
-                        assert_eq!(*r.key(), "right");
-                        assert_eq!(*r.value(), 0x01);
-                    }
-                    _ => panic!("one of the child nodes of the left internal node was not a leaf"),
-                };
-            }
-            (_, Some(_)) => panic!("right child not None"),
-            _ => panic!("wrong cast for children"),
-        }
-    }
-
-    #[test]
-    fn internal_hash_correctness1() {
-        let left_r = Leaf::new("left", 0x00).into();
-        let right_r = Leaf::new("right", 0x01).into();
-        let i = Internal::new(Some(left_r), Some(right_r));
-        let h1 = i.hash();
-        let p1 = Internal::new(Some(i.into()), None);
-
-        let left_r = Leaf::new("left", 0x00).into();
-        let right_r = Leaf::new("right", 0x01).into();
-        let i = Internal::new(Some(left_r), Some(right_r));
-        let h2 = i.hash();
-        let p2 = Internal::new(Some(i.into()), None);
-
-        assert_eq!(h1, h2);
-        assert_eq!(p1.hash(), p2.hash());
-    }
-
-    #[test]
-    fn internal_get_normal() {
-        let i: Node<_, _> = Internal::new(None, None).into();
-        let i = i.insert("Alice", 0x01, 0);
-        let i = i.insert("Bob", 0x02, 0);
-
-        let v = i.get("Alice", 0).unwrap();
-        assert_eq!(*v, 0x01);
-
-        let v = i.get("Bob", 0).unwrap();
-        assert_eq!(*v, 0x02);
-    }
-
-    #[test]
-    #[should_panic(expected = "key association does not exist")]
-    fn internal_get_err_non_existant() {
-        let i: Node<_, _> = Internal::new(None, None).into();
-        let i = i.insert("Alice", 0x01, 0);
-        let i = i.insert("Bob", 0x02, 0);
-
-        i.get("Charlie", 0).unwrap();
-    }
-
-    #[test]
-    #[should_panic(expected = "key association not present in local tree")]
-    fn internal_get_err_behind_placeholder() {
-        let i: Node<_, _> = Internal::new(None, None).into();
-        let i = i.insert("Bob", 0x01, 0); // left
-        let i = i.insert("Aaron", 0x02, 0); // right, left
-        let mut i = i.insert("Dave", 0x03, 0).internal(); // right, right
-
-        let ph: Placeholder = i.right().unwrap().into();
-        i.right = Some(Box::new(ph.into()));
-        let i: Node<_, _> = i.into();
-
-        let v = i.get("Bob", 0).unwrap();
-        assert_eq!(*v, 0x01);
-
-        i.get("Aaron", 0).unwrap();
-    }
 
     // Initially there is only one internal node holding a leaf which key hash starts with b1...
     // We insert (k,v) such that hash(k) starts with b0...
@@ -949,6 +1058,31 @@ mod tests {
         }
     }
 
+    // REMOVE TESTS
+
+    #[test]
+    fn leaf_remove_normal() {
+        let l: Node<_, _> = Leaf::new("Alice", 0x01).into();
+        let v = l.remove("Alice", 0);
+        assert_eq!(v.0, Some(0x01));
+        if let Some(_) = v.1 {
+            panic!("should return None for node");
+        }
+    }
+
+    #[test]
+    fn leaf_remove_non_existant() {
+        let l: Node<_, _> = Leaf::new("Alice", 0x01).into();
+        let v = l.remove("Bob", 0);
+        let l = v.1.unwrap().leaf();
+        assert_eq!(*l.key(), "Alice");
+        assert_eq!(*l.value(), 0x01);
+
+        if let Some(_) = v.0 {
+            panic!("should return None for value");
+        }
+    }
+
     // Testing leaf return after remove.
     #[test]
     fn internal_remove_normal1() {
@@ -999,8 +1133,8 @@ mod tests {
     #[test]
     fn internal_remove_normal3() {
         let i: Node<_, _> = Internal::new(None, None).into();
-        let i = i.insert("Bob", 0x02, 0); // left (x4), right
-        let i = i.insert("Charlie", 0x03, 0); // left (x4), left
+        let i = i.insert("Bob", 0x02, 0); // L,R,R,L,L,L,R,R
+        let i = i.insert("Charlie", 0x03, 0); // L,R,R,L,L,L,R,L
 
         let v = i.remove("Charlie", 0);
         assert_eq!(v.0, Some(0x03));
@@ -1019,8 +1153,8 @@ mod tests {
     fn internal_remove_normal4() {
         let i: Node<_, _> = Internal::new(None, None).into();
         let i = i.insert("Aaron", 0x01, 0); // right
-        let i = i.insert("Bob", 0x02, 0); // left (x4), right
-        let i = i.insert("Charlie", 0x03, 0); // left (x4), left
+        let i = i.insert("Bob", 0x02, 0); // L,R,R,L,L,L,R,R
+        let i = i.insert("Charlie", 0x03, 0); // L,R,R,L,L,L,R,L
 
         let v = i.remove("Charlie", 0);
         assert_eq!(v.0, Some(0x03));
@@ -1045,8 +1179,8 @@ mod tests {
     fn internal_remove_err() {
         let i: Node<_, _> = Internal::new(None, None).into();
         let i = i.insert("Aaron", 0x01, 0); // right
-        let i = i.insert("Bob", 0x02, 0); // left (x4), right
-        let i = i.insert("Charlie", 0x03, 0); // left (x4), left
+        let i = i.insert("Bob", 0x02, 0); // L,R,R,L,L,L,R,R
+        let i = i.insert("Charlie", 0x03, 0); // L,R,R,L,L,L,R,L
 
         let v = i.remove("Charlie", 0);
         assert_eq!(v.0, Some(0x03));
@@ -1067,43 +1201,12 @@ mod tests {
         }
     }
 
-    macro_rules! test_hash {
-        ($data:expr) => {
-            crypto::hash(&($data)).expect("failed to hash data")
-        };
-    }
-
-    #[test]
-    fn placeholder_constructor() {
-        let ph = Placeholder::new(test_hash!(0u32));
-
-        assert_eq!(ph.hash(), test_hash!(0u32));
-        assert_eq!(ph.d, test_hash!(0u32));
-    }
-
-    #[test]
-    fn placeholder_from_leaf() {
-        let base = Leaf::new("", 0x00);
-        let hash = base.hash();
-
-        let ph: Placeholder = base.into();
-        assert_eq!(ph.d, hash);
-    }
-
-    #[test]
-    fn placeholder_from_internal() {
-        let base = Leaf::new("", 0x00);
-        let i = Internal::new(None, Some(base.into()));
-        let hash = i.hash();
-
-        let ph: Placeholder = i.into();
-        assert_eq!(ph.d, hash);
-    }
+    // SERIALIZATION TESTS
 
     #[test]
     fn ser_de() {
-        let i: Node<_, _> = Leaf::new("Bob", 0x02).into(); // left (x4), right
-        let i = i.insert("Charlie", 0x03, 0); // left (x4), left
+        let i: Node<_, _> = Leaf::new("Bob", 0x02).into(); // L,R,R,L,L,L,R,R
+        let i = i.insert("Charlie", 0x03, 0); // L,R,R,L,L,L,R,L
 
         extern crate bincode;
 
@@ -1112,5 +1215,98 @@ mod tests {
 
         assert_eq!(g.get("Bob", 0), Ok(&0x02));
         assert_eq!(g.get("Charlie", 0), Ok(&0x03));
+    }
+
+    // PROOF TESTS
+
+    #[test]
+    fn leaf_get_proof_single() -> Result<(), &'static str> {
+        let l = Leaf::new("Alice", 1);
+        let a = l.get_proof_single_internal("Alice")?;
+
+        assert_eq!(*a.value(), 1);
+        assert_eq!(*a.key(), "Alice");
+
+        Ok(())
+    }
+
+    #[test]
+    #[should_panic(expected = "attempting to get proof for non existing key association")]
+    fn leaf_get_proof_single_err() {
+        let l = Leaf::new("Alice", 1);
+        l.get_proof_single_internal("Bob").unwrap();
+    }
+
+    #[test]
+    fn internal_get_proof_single1() {
+        let l: Node<_, _> = Leaf::new("Bob", 1).into(); //left
+        let i = l.insert("Aaron", 2, 0); //right
+
+        let h = crypto::hash(&"Aaron").unwrap();
+        let proof = i
+            .get_proof_single_internal("Aaron", 0, &h)
+            .unwrap()
+            .internal();
+
+        let ph: Placeholder = Leaf::new("Bob", 1).into();
+
+        assert_eq!(*proof.left().unwrap().placeholder_ref(), ph);
+        assert_eq!(*proof.right().unwrap().leaf_ref(), Leaf::new("Aaron", 2));
+    }
+
+    #[test]
+    fn internal_get_proof_single2() {
+        let l: Node<_, _> = Leaf::new("Bob", 0x01).into(); //left
+        let i = l.insert("Aaron", 0x02, 0); //right, left
+        let i = i.insert("Dave", 0x03, 0); // right, right
+
+        let h = crypto::hash(&"Dave").unwrap();
+        let proof = i
+            .get_proof_single_internal("Dave", 0, &h)
+            .unwrap()
+            .internal();
+
+        let ph_bob: Placeholder = Leaf::new("Bob", 0x01).into();
+        let ph_aar: Placeholder = Leaf::new("Aaron", 0x02).into();
+
+        let r1 = proof.right().unwrap().internal_ref();
+
+        assert_eq!(*proof.left().unwrap().placeholder_ref(), ph_bob);
+        assert_eq!(*r1.left().unwrap().placeholder_ref(), ph_aar);
+        assert_eq!(*r1.right().unwrap().leaf_ref(), Leaf::new("Dave", 0x03));
+    }
+
+    #[test]
+    fn internal_get_proof_single3() {
+        let l: Node<_, _> = Leaf::new("Bob", 0x01).into(); // L,R,R,L,L,L,R,R
+        let i = l.insert("Charlie", 0x03, 0); // L,R,R,L,L,L,R,L
+        let i = i.insert("Aaron", 0x02, 0); // right (R)
+
+        let h = crypto::hash(&"Charlie").unwrap();
+        let proof = i
+            .get_proof_single_internal("Charlie", 0, &h)
+            .unwrap()
+            .internal();
+
+        let ph_bob: Placeholder = Leaf::new("Bob", 0x01).into();
+        let ph_aar: Placeholder = Leaf::new("Aaron", 0x02).into();
+
+        let d1 = proof.left().unwrap().internal_ref();
+        let d2 = d1.right().unwrap().internal_ref();
+        let d3 = d2.right().unwrap().internal_ref();
+        let d4 = d3.left().unwrap().internal_ref();
+        let d5 = d4.left().unwrap().internal_ref();
+        let d6 = d5.left().unwrap().internal_ref();
+        let d7 = d6.right().unwrap().internal_ref();
+
+        assert_eq!(*proof.right().unwrap().placeholder_ref(), ph_aar);
+        assert!(d1.left().is_none());
+        assert!(d2.left().is_none());
+        assert!(d3.right().is_none());
+        assert!(d4.right().is_none());
+        assert!(d5.right().is_none());
+        assert!(d6.left().is_none());
+        assert_eq!(*d7.right().unwrap().placeholder_ref(), ph_bob);
+        assert_eq!(*d7.left().unwrap().leaf_ref(), Leaf::new("Charlie", 0x03));
     }
 }

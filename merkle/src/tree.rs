@@ -6,16 +6,16 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, Default)]
 pub struct Tree<K, V>
 where
-    K: Serialize + Eq,
-    V: Serialize,
+    K: Serialize + Copy + Eq,
+    V: Serialize + Copy,
 {
     root: Option<Node<K, V>>,
 }
 
 impl<K, V> Tree<K, V>
 where
-    K: Serialize + Eq,
-    V: Serialize,
+    K: Serialize + Copy + Eq,
+    V: Serialize + Copy,
 {
     pub fn new() -> Self {
         Tree { root: None }
