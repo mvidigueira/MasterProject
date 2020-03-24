@@ -1,10 +1,11 @@
 // TODO: REMOVE THIS LATER!
 #![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 
 use drop::crypto::{self, Digest};
 use std::fmt;
+
+pub use crate::error::MerkleError::{self, KeyBehindPlaceholder, KeyNonExistant};
 
 // bits: 0 -> most significant, 255 -> least significant
 #[inline]
@@ -140,7 +141,7 @@ where
     ///
     /// If the key association does not exist, or the key association is not present
     /// in the local structure, returns an error.
-    pub fn get(&self, k: K, depth: u32) -> Result<&V, &'static str> {
+    pub fn get(&self, k: K, depth: u32) -> Result<&V, MerkleError> {
         let d = crypto::hash(&k).unwrap();
         self.get_internal(k, depth, &d)
     }
@@ -153,12 +154,10 @@ where
         k: K,
         depth: u32,
         k_digest: &Digest,
-    ) -> Result<&V, &'static str> {
+    ) -> Result<&V, MerkleError> {
         match self {
             Node::Internal(n) => n.get_internal(k, depth, k_digest),
-            Node::Placeholder(_) => {
-                Err("key association not present in local tree (possibly behind placeholder)")
-            }
+            Node::Placeholder(_) => Err(KeyBehindPlaceholder),
             Node::Leaf(n) => n.get_internal(k),
         }
     }
@@ -319,11 +318,11 @@ where
         &self.v
     }
 
-    fn get_internal(&self, k: K) -> Result<&V, &'static str> {
+    fn get_internal(&self, k: K) -> Result<&V, MerkleError> {
         if self.k == k {
             Ok(self.value())
         } else {
-            Err("key association does not exist")
+            Err(KeyNonExistant)
         }
     }
 
@@ -431,16 +430,16 @@ where
         k: K,
         depth: u32,
         k_digest: &Digest,
-    ) -> Result<&V, &'static str> {
+    ) -> Result<&V, MerkleError> {
         if bit(k_digest.as_ref(), depth as u8) {
             match &self.right {
                 Some(n) => n.as_ref().get_internal(k, depth + 1, k_digest),
-                None => Err("key association does not exist"),
+                None => Err(KeyNonExistant),
             }
         } else {
             match &self.left {
                 Some(n) => n.as_ref().get_internal(k, depth + 1, k_digest),
-                None => Err("key association does not exist"),
+                None => Err(KeyNonExistant),
             }
         }
     }
@@ -600,14 +599,14 @@ where
         key: K,
         depth: u32,
         k_digest: &Digest,
-    ) -> Result<Self, &'static str> {
+    ) -> Result<Self, MerkleError> {
         match self {
             Node::Internal(n) => match n.get_proof_single_internal(key, depth, k_digest) {
                 Ok(n) => Ok(n.into()),
                 Err(e) => Err(e),
             },
             Node::Placeholder(_) => {
-                Err("Unspecified behaviour for 'get_proof_single_internal' for Placeholder")
+                Err(KeyBehindPlaceholder)
             }
             Node::Leaf(n) => match n.get_proof_single_internal(key) {
                 Ok(n) => Ok(n.into()),
@@ -626,11 +625,11 @@ where
     fn get_proof_single_internal(
         &self,
         key: K,
-    ) -> Result<Self, &'static str> {
+    ) -> Result<Self, MerkleError> {
         if self.k == key {
             Ok(self.clone())
         } else {
-            Err("attempting to get proof for non existing key association")
+            Err(KeyNonExistant)
         }
     }
 }
@@ -646,14 +645,14 @@ where
         k: K,
         depth: u32,
         k_digest: &Digest,
-    ) -> Result<Self, &'static str> {
+    ) -> Result<Self, MerkleError> {
         if bit(k_digest.as_ref(), depth as u8) {
             let right = match &self.right {
                 Some(n) => match n.as_ref().get_proof_single_internal(k, depth + 1, k_digest) {
                     Err(e) => { return Err(e); },
                     Ok(n) => Some(n),
                 }
-                None => { return Err("attempting to get proof for non existing key association"); },
+                None => { return Err(KeyNonExistant); },
             };
             let left = match &self.left {
                 None => None,
@@ -666,7 +665,7 @@ where
                     Err(e) => { return Err(e); },
                     Ok(n) => Some(n),
                 }
-                None => { return Err("attempting to get proof for non existing key association"); },
+                None => { return Err(KeyNonExistant); },
             };
             let right = match &self.right {
                 None => None,
@@ -829,7 +828,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "key association does not exist")]
+    #[should_panic(expected = "KeyNonExistant")]
     fn leaf_get_err_non_existant() {
         let base = Leaf::new("Alice", 0x00);
 
@@ -850,7 +849,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "key association does not exist")]
+    #[should_panic(expected = "KeyNonExistant")]
     fn internal_get_err_non_existant() {
         let i: Node<_, _> = Internal::new(None, None).into();
         let i = i.insert("Alice", 0x01, 0);
@@ -860,7 +859,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "key association not present in local tree")]
+    #[should_panic(expected = "KeyBehindPlaceholder")]
     fn internal_get_err_behind_placeholder() {
         let i: Node<_, _> = Internal::new(None, None).into();
         let i = i.insert("Bob", 0x01, 0); // left
@@ -1237,7 +1236,7 @@ mod tests {
     // PROOF TESTS
 
     #[test]
-    fn leaf_get_proof_single() -> Result<(), &'static str> {
+    fn leaf_get_proof_single() -> Result<(), MerkleError> {
         let l = Leaf::new("Alice", 1);
         let a = l.get_proof_single_internal("Alice")?;
 
@@ -1248,7 +1247,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "attempting to get proof for non existing key association")]
+    #[should_panic(expected = "KeyNonExistant")]
     fn leaf_get_proof_single_err() {
         let l = Leaf::new("Alice", 1);
         l.get_proof_single_internal("Bob").unwrap();

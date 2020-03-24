@@ -8,6 +8,5 @@ edition = "2018"
 
 [dependencies]
 drop = { path = "/home/manuel/Documents/M4/rust_playground/drop" }
-serde = { version = "1.0", features = ["derive", "rc"] }
-sha2 = "0.8.1"
+serde = { version = "1.0", features = ["derive"] }
 bincode = "1.2.1"

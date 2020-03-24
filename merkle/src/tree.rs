@@ -1,5 +1,4 @@
-use crate::node::Leaf;
-use crate::node::Node;
+use crate::node::{Leaf, Node, MerkleError};
 
 use serde::{Deserialize, Serialize};
 
@@ -21,14 +20,14 @@ where
         Tree { root: None }
     }
 
-    pub fn get(&self, k: K) -> Result<&V, &'static str> {
+    pub fn get(&self, k: K) -> Result<&V, MerkleError> {
         match &self.root {
-            None => Err("key association does not exist"),
+            None => Err(MerkleError::KeyNonExistant),
             Some(r) => r.get(k, 0),
         }
     }
 
-    // Consider refactoring to retrn old value
+    // Consider refactoring to return old value
     pub fn insert(&mut self, k: K, v: V) {
         match self.root.take() {
             None => {
