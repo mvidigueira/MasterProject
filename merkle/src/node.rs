@@ -593,8 +593,12 @@ where
     K: Serialize + Copy + Eq,
     V: Serialize + Copy,
 {
-    #![allow(dead_code)]
-    pub fn get_proof_single_internal(
+    pub fn get_proof_single(&self, k: K, depth: u32) -> Result<Self, MerkleError> {
+        let d = crypto::hash(&k).unwrap();
+        self.get_proof_single_internal(k, depth, &d)
+    }
+
+    fn get_proof_single_internal(
         &self,
         key: K,
         depth: u32,

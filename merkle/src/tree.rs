@@ -1,4 +1,4 @@
-use crate::node::{Leaf, Node, MerkleError};
+use crate::node::{Leaf, Node, MerkleError, Hashable};
 
 use serde::{Deserialize, Serialize};
 
@@ -16,10 +16,6 @@ where
     K: Serialize + Copy + Eq,
     V: Serialize + Copy,
 {
-    pub fn new() -> Self {
-        Tree { root: None }
-    }
-
     pub fn get(&self, k: K) -> Result<&V, MerkleError> {
         match &self.root {
             None => Err(MerkleError::KeyNonExistant),
@@ -51,4 +47,24 @@ where
             },
         }
     }
+
+    pub fn get_proof(&self, k: K) -> Result<Proof<K,V>, MerkleError> {
+        match &self.root {
+            None => Err(MerkleError::KeyNonExistant),
+            Some(r) => match r.get_proof_single(k, 0) {
+                Err(r) => Err(r),
+                Ok(n) => Ok(Tree{ root: Some(n) }),
+            }
+        }
+    }
+
+    pub fn validate(&self, proof: &Proof<K,V>) -> bool {
+        match (&self.root, &proof.root) {
+            (None, _) => panic!("Validating tree is empty"),
+            (Some(_), None) => true,
+            (Some(n), Some(p)) => n.hash() == p.hash(),
+        }
+    }
 }
+
+pub type Proof<K,V> = Tree<K,V>;
