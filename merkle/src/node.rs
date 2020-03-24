@@ -133,6 +133,13 @@ where
         }
     }
 
+    /// Tries to return the value associated to key k from the underlying tree.
+    /// depth is the depth of the current node in the tree (between 0 and 255).
+    ///
+    /// # Errors
+    ///
+    /// If the key association does not exist, or the key association is not present
+    /// in the local structure, returns an error.
     pub fn get(&self, k: K, depth: u32) -> Result<&V, &'static str> {
         let d = crypto::hash(&k).unwrap();
         self.get_internal(k, depth, &d)
@@ -141,12 +148,6 @@ where
     /// Tries to return the value associated to key k from the underlying tree.
     /// k_digest must be the digest of k using `crypto::hash()`.
     /// depth is the depth of the current node in the tree (between 0 and 255).
-    ///
-    /// # Errors
-    ///
-    /// If the key association does not exist, or the key association is not present
-    /// in the local structure, returns an error.
-    /// ```
     fn get_internal(
         &self,
         k: K,
@@ -162,13 +163,7 @@ where
         }
     }
 
-    pub fn insert(self, k: K, v: V, depth: u32) -> Self {
-        let d = crypto::hash(&k).unwrap();
-        self.insert_internal(k, v, depth, &d)
-    }
-
     /// Adds the key value (k, v) association to the underlying tree.
-    /// k_digest must be the digest of k using `crypto::hash()`.
     /// depth is the depth of the current node in the tree (between 0 and 255).
     ///
     /// # Panics
@@ -177,6 +172,14 @@ where
     /// panicking with unimplemented!(...).
     /// Behaviour is currently unspecified if the key (k) is already present,
     /// panicking with unimplemented!(...)
+    pub fn insert(self, k: K, v: V, depth: u32) -> Self {
+        let d = crypto::hash(&k).unwrap();
+        self.insert_internal(k, v, depth, &d)
+    }
+
+    /// Adds the key value (k, v) association to the underlying tree.
+    /// k_digest must be the digest of k using `crypto::hash()`.
+    /// depth is the depth of the current node in the tree (between 0 and 255).
     fn insert_internal(
         self,
         k: K,
@@ -195,11 +198,25 @@ where
         }
     }
 
+    /// Removes the key value (k, v) association to the underlying tree, if it exists.
+    /// Returns the value previously associated to the key, as well as the replacement
+    /// node for the current node.
+    /// 'depth' is the depth of the current node in the tree (between 0 and 255).
+    ///
+    /// # Panics
+    ///
+    /// Behaviour is currently unspecified for the `Placeholder` variant,
+    /// panicking with unimplemented!(...).
     pub fn remove(self, k: K, depth: u32) -> (Option<V>, Option<Self>) {
         let d = crypto::hash(&k).unwrap();
         self.remove_internal(k, depth, &d)
     }
 
+    /// Removes the key value (k, v) association to the underlying tree, if it exists.
+    /// Returns the value previously associated to the key, as well as the replacement
+    /// node for the current node.
+    /// depth is the depth of the current node in the tree (between 0 and 255).
+    /// k_digest must be the digest of k using `crypto::hash()`.
     fn remove_internal(
         self,
         k: K,
@@ -606,7 +623,7 @@ where
     V: Serialize + Copy,
 {
     #![allow(dead_code)]
-    pub fn get_proof_single_internal(
+    fn get_proof_single_internal(
         &self,
         key: K,
     ) -> Result<Self, &'static str> {
@@ -624,7 +641,7 @@ where
     V: Serialize + Copy,
 {
     #![allow(dead_code)]
-    pub fn get_proof_single_internal(
+    fn get_proof_single_internal(
         &self,
         k: K,
         depth: u32,
