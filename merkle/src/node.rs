@@ -39,7 +39,7 @@ impl Hashable for String {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone)]
 pub enum Node<K, V>
 where
     K: Serialize + Clone + Eq,
@@ -69,7 +69,7 @@ where
         }
     }
 
-    fn is_placeholder(&self) -> bool {
+    pub fn is_placeholder(&self) -> bool {
         match self {
             Node::Placeholder(_) => true,
             _ => false,
@@ -274,6 +274,18 @@ where
             },
         }
     }
+
+    pub fn merge_unchecked(&mut self, other: &Self) {
+        match (self, other) {
+            (Node::Internal(mine), Node::Internal(other)) => mine.merge_unchecked(other),
+            (Node::Internal(_), Node::Placeholder(_)) => (), // assuming the hashes are equal (unchecked)
+            (Node::Internal(_), Node::Leaf(_)) => { panic!("The trees should be compatible but are not"); },
+            (Node::Leaf(_), Node::Internal(_)) => { panic!("The trees should be compatible but are not"); },
+            (Node::Leaf(_), Node::Placeholder(_)) => (), // assuming the hashes are equal (unchecked)
+            (Node::Leaf(_), Node::Leaf(_)) => (),        // assuming the leaves are equal (unchecked)
+            (Node::Placeholder(_), _) => { panic!("This code should never be reached"); },
+        }
+    }
 }
 
 impl<K, V> Hashable for Node<K, V>
@@ -410,7 +422,7 @@ where
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone)]
 pub struct Internal<K, V>
 where
     K: Serialize + Clone + Eq,
@@ -561,6 +573,36 @@ where
                     _ => (r.0, self.into()),
                 }
             }
+        }
+    }
+
+    fn merge_unchecked(&mut self, other: &Self) {
+        match (&mut self.left, other.left()) {
+            (None, None) => (),
+            (Some(a), Some(b)) if a.is_placeholder() && b.is_placeholder() => (),
+            (Some(a), Some(b)) if a.is_placeholder() => {
+                self.left = Some(Box::new(b.clone()));
+            }
+            (Some(a), Some(b)) => {
+                a.merge_unchecked(b);
+            },
+            (_, _) => {
+                panic!("The trees should be compatible but are not");
+            },
+        }
+
+        match (&mut self.right, other.right()) {
+            (None, None) => (),
+            (Some(a), Some(b)) if a.is_placeholder() && b.is_placeholder() => (),
+            (Some(a), Some(b)) if a.is_placeholder() => {
+                self.right = Some(Box::new(b.clone()));
+            }
+            (Some(a), Some(b)) => {
+                a.merge_unchecked(b);
+            },
+            (_, _) => {
+                panic!("The trees should be compatible but are not");
+            },
         }
     }
 }
@@ -740,7 +782,7 @@ where
                 }
                 Ok(n) => Some(n),
             },
-            None => None, // Proof of Deniability
+            None => None, // Proof of Deniability (instead of returning an error)
         };
 
         let side_b = match side_b {
@@ -1441,5 +1483,33 @@ mod tests {
         }
 
         p.unwrap().get("Charlie", 0).unwrap();
+    }
+
+    // MERGE
+
+    #[test]
+    fn leaf_merge() {
+        let mut l: Node<_,_> = Leaf::new("Alice", 3).into();
+        let l2 = l.clone();
+
+        l.merge_unchecked(&l2);
+        assert_eq!(l.leaf(), Leaf::new("Alice", 3));
+    }
+
+    #[test]
+    fn internal_merge() {
+        let l: Node<_, _> = Leaf::new("Bob", 0x01).into(); // L,R,R,L,L,L,R,R
+        let (_, i) = l.insert("Charlie", 0x03, 0); // L,R,R,L,L,L,R,L
+        let (_, i) = i.insert("Aaron", 0x02, 0); // right (R)
+
+        let mut proof = i.get_proof_single("Charlie", 0).unwrap();
+        assert_eq!(proof.get("Charlie", 0), Ok(&0x03));
+        assert_eq!(proof.get("Bob", 0), Err(KeyBehindPlaceholder));
+        assert_eq!(proof.get("Aaron", 0), Err(KeyBehindPlaceholder));
+
+        proof.merge_unchecked(&i);
+        assert_eq!(proof.get("Charlie", 0), Ok(&0x03));
+        assert_eq!(proof.get("Bob", 0), Ok(&0x01));
+        assert_eq!(proof.get("Aaron", 0), Ok(&0x02));
     }
 }

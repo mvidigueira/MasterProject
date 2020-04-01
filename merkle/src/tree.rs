@@ -180,10 +180,10 @@ where
     /// [`KeyNonExistant`] is returned.
     ///
     /// If the tree did not have the key present but it cannot determine if it does or does not exist
-    /// (e.g. locally part of the tree is missing, replaced by a placeholder), [`KeyBehindPlacehodler`] is returned.
+    /// (e.g. locally part of the tree is missing, replaced by a placeholder), [`KeyBehindPlaceholder`] is returned.
     ///
     /// [`KeyNonExistant`]: error/enum.MerkleError.html
-    /// [`KeyBehindPlacehodler`]: error/enum.MerkleError.html
+    /// [`KeyBehindPlaceholder`]: error/enum.MerkleError.html
     ///
     /// # Examples
     ///
@@ -298,7 +298,12 @@ where
     ///
     /// [`Eq`]: https://doc.rust-lang.org/std/cmp/trait.Eq.html
     /// [`Serialize`]: https://docs.serde.rs/serde/trait.Serialize.html
+    /// 
+    /// # Errors
+    /// If the tree cannot determine if the key does or does not exist
+    /// (e.g. locally part of the tree is missing, replaced by a placeholder), [`KeyBehindPlaceholder`] is returned.
     ///
+    /// [`KeyBehindPlaceholder`]: error/enum.MerkleError.html
     /// # Examples
     ///
     /// ```
@@ -328,7 +333,7 @@ where
         Q: Serialize + Eq,
     {
         match &self.root {
-            None => Err(MerkleError::KeyNonExistant),
+            None => Ok(Tree { root: None }),
             Some(r) => match r.get_proof_single(k, 0) {
                 Err(r) => Err(r),
                 Ok(n) => Ok(Tree { root: Some(n) }),
@@ -340,8 +345,6 @@ where
     /// from the point of view of this tree.
     ///
     /// Outdated proofs (compared to the tree) are considered invalid.
-    ///
-    /// Empty proofs are always valid.
     ///
     /// # Examples
     ///
@@ -360,8 +363,9 @@ where
     /// ```
     pub fn validate(&self, proof: &Proof<K, V>) -> bool {
         match (&self.root, &proof.root) {
-            (None, _) => panic!("Validating tree is empty"),
-            (Some(_), None) => true,
+            (None, None) => true,
+            (None, Some(n)) => Placeholder::default().hash() == n.hash(),
+            (Some(n), None) => n.hash() == Placeholder::default().hash(),
             (Some(n), Some(p)) => n.hash() == p.hash(),
         }
     }
@@ -406,6 +410,67 @@ where
             },
         }
     }
+
+    /// Merges two *compatible* trees, modifying the first.
+    /// 
+    /// Concretely, it replaces placeholders in the first tree with the concrete sub-trees
+    /// in the second tree. The first tree is therefore extended with the missing information
+    /// (key-value associations) that the second tree possesses.
+    ///
+    /// This can be used as a method to merge (and condense) multiple proofs into one.
+    ///
+    /// # Errors
+    /// If the trees are not compatible, [`IncompatibleTrees`] is returned.
+    ///
+    /// [`IncompatibleTrees`]: error/enum.MerkleError.html
+    /// 
+    /// # Examples
+    ///
+    /// ```
+    /// extern crate merkle;
+    /// use merkle::Tree;
+    ///
+    /// let mut tree = Tree::new();
+    /// tree.insert(1, "a");
+    /// tree.insert(2, "b");
+    ///
+    /// let proof1 = tree.get_proof(&1).unwrap();
+    /// let proof2 = tree.get_proof(&2).unwrap();
+    /// 
+    /// let mut validator = tree.get_validator();
+    ///
+    /// validator.merge(&proof1);
+    /// validator.merge(&proof2);
+    /// 
+    /// assert_eq!(validator.get(&1), Ok(&"a"));
+    /// assert_eq!(validator.get(&2), Ok(&"b"));
+    /// ```
+    pub fn merge(&mut self, other: &Self) -> Result<(), MerkleError> {
+        let compatible = match (&self.root, &other.root) {
+            (None, None) => true,
+            (None, Some(n)) => Placeholder::default().hash() == n.hash(),
+            (Some(n), None) => n.hash() == Placeholder::default().hash(),
+            (Some(n), Some(p)) => n.hash() == p.hash(),
+        };
+
+        if !compatible {
+            return Err(MerkleError::IncompatibleTrees);
+        }
+
+        match (&mut self.root, &other.root) {
+            (None, _) => (),    // right must be default placeholder
+            (_, None) => (),    // left must be default placeholder
+            (Some(Node::Placeholder(_)), Some(Node::Placeholder(_))) => (),
+            (Some(Node::Placeholder(_)), Some(n)) => { 
+                self.root = Some(n.clone());
+            },
+            (Some(a), Some(b)) => {
+                a.merge_unchecked(b);
+            },
+        };
+
+        Ok(())
+    }
 }
 
 /// A merkle proof. Used in the context of a *validating* tree (usually incomplete).
@@ -417,7 +482,7 @@ pub type Validator<K, V> = Tree<K, V>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::MerkleError::{KeyBehindPlaceholder, KeyNonExistant};
+    use crate::error::MerkleError::{KeyBehindPlaceholder, KeyNonExistant, IncompatibleTrees};
 
     #[test]
     fn get1() {
@@ -548,5 +613,39 @@ mod tests {
         let more_recent_proof = tree.get_proof(&2).unwrap();
         assert_eq!(true, tree.validate(&more_recent_proof));
         assert_eq!(false, validator.validate(&more_recent_proof));
+    }
+
+    #[test]
+    fn merge() {
+        let mut tree = Tree::new();
+        tree.insert(1, "a");
+        tree.insert(2, "b");
+    
+        let proof1 = tree.get_proof(&1).unwrap();
+        let proof2 = tree.get_proof(&2).unwrap();
+    
+        let mut validator = tree.get_validator();
+    
+        assert_eq!(validator.merge(&proof1), Ok(()));
+        assert_eq!(validator.merge(&proof2), Ok(()));
+    
+        assert_eq!(validator.get(&1), Ok(&"a"));
+        assert_eq!(validator.get(&2), Ok(&"b"));
+    }
+
+    #[test]
+    fn merge_err() {
+        let mut tree = Tree::new();
+        
+        tree.insert(1, "a");
+        let proof1 = tree.get_proof(&1).unwrap();
+
+        tree.insert(2, "b");
+        let proof2 = tree.get_proof(&2).unwrap();
+    
+        let mut validator = tree.get_validator();
+    
+        assert_eq!(validator.merge(&proof1), Err(IncompatibleTrees));
+        assert_eq!(validator.merge(&proof2), Ok(()));
     }
 }
