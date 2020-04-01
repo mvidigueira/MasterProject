@@ -1,4 +1,4 @@
-use crate::node::{Hashable, Leaf, MerkleError, Node};
+use crate::node::{Hashable, Leaf, MerkleError, Node, Placeholder};
 use std::borrow::Borrow;
 
 use serde::{Deserialize, Serialize};
@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 /// creation of deniability proofs, i.e. proofs that show that a key-value pair with a
 /// specific key doesn't (yet) exist. Please refer to the end of this documentation for
 /// a brief explanation.
-/// 
+///
 /// Note that this is unlike normal merkle trees following the [RFC6962](https://tools.ietf.org/html/rfc6962)
 /// standard which are generally balanced, and for which the order of key-value pairs
 /// in the tree is determined by the order of insertion.
@@ -18,8 +18,8 @@ use serde::{Deserialize, Serialize};
 /// The default hashing algorithm is currently SHA256, though this is
 /// subject to change at any point in the future.
 ///
-/// It is required that the keys implement the [`Eq`], [`Serialize`], and [`Clone`] 
-/// traits, although this can frequently be achieved by using 
+/// It is required that the keys implement the [`Eq`], [`Serialize`], and [`Clone`]
+/// traits, although this can frequently be achieved by using
 /// `#[derive(PartialEq, Eq, Serialize, Clone)]`.
 /// If you implement these yourself, it is important that the following
 /// property holds:
@@ -32,13 +32,13 @@ use serde::{Deserialize, Serialize};
 ///
 /// It is a logic error for a key to be modified in such a way that the key's
 /// serialization, as determined by the [`Serialize`] trait, or its equality,
-/// as determined by the [`Eq`] trait, changes while it is in the tree. This 
+/// as determined by the [`Eq`] trait, changes while it is in the tree. This
 /// is normally only possible through [`Cell`], [`RefCell`], global state, I/O,
 /// or unsafe code.
-/// 
+///
 /// Values must also implement the [`Serialize`] and [`Clone`] traits, as trees
 /// are designed to be sent over the network.
-/// 
+///
 /// Currently, due to the way proofs are constructed independently from the
 /// generating tree, both keys and values must implement the [`Clone`] trait.
 /// This might be subject to change in the future.
@@ -52,7 +52,7 @@ use serde::{Deserialize, Serialize};
 /// // Type inference lets us omit an explicit type signature (which
 /// // would be `Tree<String, String>` in this example).
 /// let mut color_preferences = Tree::new();
-/// 
+///
 /// // Add some preferences.
 /// color_preferences.insert(
 ///     "Alice".to_string(),
@@ -66,26 +66,26 @@ use serde::{Deserialize, Serialize};
 ///     "Charlie".to_string(),
 ///     "blue".to_string(),
 /// );
-/// 
+///
 /// // Bob wants to remove his preference.
 /// // When trees store owned values (String), they can still be
 /// // queried using references (&str).
 /// let old_preference = color_preferences.remove("Bob");
 /// assert_eq!(old_preference.unwrap(), "green");
-/// 
+///
 /// // Charlie actually preferes 'cyan'. Let's change his preference.
 /// let old_preference = color_preferences.insert(
 ///     "Charlie".to_string(),
 ///     "cyan".to_string(),
 /// );
 /// assert_eq!(old_preference.unwrap(), "blue");
-/// 
+///
 /// // Let's get a cryptographic proof of Alice's preference.
 /// let proof = color_preferences.get_proof("Alice").unwrap();
-/// 
+///
 /// // We can check that it's valid.
 /// assert!(color_preferences.validate(&proof));
-/// 
+///
 /// // And we can get the corresponding value.
 /// assert_eq!(proof.get("Alice").unwrap(), "red");
 /// ```
@@ -99,28 +99,28 @@ use serde::{Deserialize, Serialize};
 /// [`Clone`]: https://doc.rust-lang.org/std/clone/trait.Clone.html
 /// [`RefCell`]: https://doc.rust-lang.org/std/cell/struct.RefCell.html
 /// [`Cell`]: https://doc.rust-lang.org/std/cell/struct.Cell.html
-/// 
+///
 /// # One-to-one mapping of key-value pairs.
-/// 
+///
 /// Key-Value pairs are placed in the tree along the path corresponding to the hash of their keys.
 /// E.g. {Key: "Alice", Value: 3} -> hash("Alice")
 /// -> b00100110... -> Left (0), Left (0), Right (1), Left (0)...
-/// 
+///
 /// Any two keys (e.g. k1, k2) with respective hashes having the first
 /// N bits in common (i.e. hash(k1)[bit0..bitN] == hash(k1)[bit0..bitN]), will share
 /// the same branch/path in the tree until depth N.
-/// 
+///
 /// By proving that some other key-value pair is present along the path of the our key, we prove
 /// that that key is not present in the tree; if it was, then the branch would run deeper until it
 /// forked and we found our key.
-/// 
+///
 /// E.g.:
 /// ```text
 /// hash(k1) = b000..
 /// hash(k2) = b110..
 /// hash(k3) = b111..
 /// ```
-/// 
+///
 /// Tree without k3:
 /// ```text
 ///         o
@@ -138,7 +138,7 @@ use serde::{Deserialize, Serialize};
 ///          k2   k3
 /// ```
 
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Tree<K, V>
 where
     K: Serialize + Clone + Eq,
@@ -178,13 +178,13 @@ where
     /// # Errors
     /// If the tree did not have the key present and it is guaranteed to not exist,
     /// [`KeyNonExistant`] is returned.
-    /// 
+    ///
     /// If the tree did not have the key present but it cannot determine if it does or does not exist
     /// (e.g. locally part of the tree is missing, replaced by a placeholder), [`KeyBehindPlacehodler`] is returned.
-    /// 
+    ///
     /// [`KeyNonExistant`]: error/enum.MerkleError.html
     /// [`KeyBehindPlacehodler`]: error/enum.MerkleError.html
-    /// 
+    ///
     /// # Examples
     ///
     /// ```
@@ -197,7 +197,7 @@ where
     /// assert_eq!(tree.get(&1), Ok(&"a"));
     /// assert_eq!(tree.get(&2), Err(KeyNonExistant));
     /// ```
-    pub fn get<Q: ?Sized>(&self, k: &Q) -> Result<&V, MerkleError> 
+    pub fn get<Q: ?Sized>(&self, k: &Q) -> Result<&V, MerkleError>
     where
         K: Borrow<Q>,
         Q: Serialize + Eq,
@@ -254,14 +254,14 @@ where
 
     /// Removes a key from the tree, returning the value at the key if the
     /// key was previously in the tree.
-    /// 
-    /// The key may be any borrowed form of the tree's key type, but 
-    /// [`Serialize`] and [`Eq`] on the borrowed form *must* match those for 
+    ///
+    /// The key may be any borrowed form of the tree's key type, but
+    /// [`Serialize`] and [`Eq`] on the borrowed form *must* match those for
     /// the key type.
-    /// 
+    ///
     /// [`Eq`]: https://doc.rust-lang.org/std/cmp/trait.Eq.html
     /// [`Serialize`]: https://docs.serde.rs/serde/trait.Serialize.html
-    /// 
+    ///
     /// # Examples
     ///
     /// ```
@@ -291,14 +291,14 @@ where
     }
 
     /// Returns a proof that the key is or is not present in the tree.
-    /// 
-    /// The key may be any borrowed form of the tree's key type, but 
-    /// [`Serialize`] and [`Eq`] on the borrowed form *must* match those for 
+    ///
+    /// The key may be any borrowed form of the tree's key type, but
+    /// [`Serialize`] and [`Eq`] on the borrowed form *must* match those for
     /// the key type.
-    /// 
+    ///
     /// [`Eq`]: https://doc.rust-lang.org/std/cmp/trait.Eq.html
     /// [`Serialize`]: https://docs.serde.rs/serde/trait.Serialize.html
-    /// 
+    ///
     /// # Examples
     ///
     /// ```
@@ -309,17 +309,20 @@ where
     /// let mut tree = Tree::new();
     /// tree.insert(1, "a");
     /// tree.insert(2, "b");
-    /// 
+    ///
     /// let proof = tree.get_proof(&1).unwrap();    // Existence proof
     /// assert!(tree.validate(&proof));
     /// assert_eq!(proof.get(&1), Ok(&"a"));
     /// assert_eq!(proof.get(&2), Err(KeyBehindPlaceholder));
-    /// 
+    ///
     /// let proof = tree.get_proof(&3).unwrap();    // Deniability proof (non-existence)
     /// assert!(tree.validate(&proof));
     /// assert_eq!(proof.get(&3), Err(KeyNonExistant));
     /// ```
-    pub fn get_proof<Q: ?Sized>(&self, k: &Q) -> Result<Proof<K, V>, MerkleError> 
+    pub fn get_proof<Q: ?Sized>(
+        &self,
+        k: &Q,
+    ) -> Result<Proof<K, V>, MerkleError>
     where
         K: Borrow<Q>,
         Q: Serialize + Eq,
@@ -335,11 +338,11 @@ where
 
     /// Returns `true` if the given proof/tree is valid (its associations are valid),
     /// from the point of view of this tree.
-    /// 
+    ///
     /// Outdated proofs (compared to the tree) are considered invalid.
-    /// 
+    ///
     /// Empty proofs are always valid.
-    /// 
+    ///
     /// # Examples
     ///
     /// ```
@@ -348,10 +351,10 @@ where
     ///
     /// let mut tree = Tree::new();
     /// tree.insert(1, "a");
-    /// 
+    ///
     /// let proof = tree.get_proof(&1).unwrap();    // Existence proof
     /// assert!(tree.validate(&proof));
-    /// 
+    ///
     /// let proof = tree.get_proof(&3).unwrap();    // Deniability proof (non-existence)
     /// assert!(tree.validate(&proof));             // Still a valid proof
     /// ```
@@ -362,21 +365,188 @@ where
             (Some(n), Some(p)) => n.hash() == p.hash(),
         }
     }
+
+    /// Returns a "validator": a new tree with a single (placeholder) node compatible with
+    /// the previous tree (i.e. with the same hash).
+    ///
+    /// The validator can be used to validate proofs instead of the original tree.
+    ///
+    /// The validator is independent from the tree; generally, it will not accept proofs
+    /// obtained on newer versions of the original tree, unless the new version is equivalent
+    /// to the old one, or on the unlikely event that there is a hash collision.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// extern crate merkle;
+    /// use merkle::Tree;
+    ///
+    /// let mut tree = Tree::new();
+    /// tree.insert(1, "a");
+    /// tree.insert(2, "b");
+    ///
+    /// let validator = tree.get_validator();
+    ///
+    /// let proof = tree.get_proof(&1).unwrap();
+    /// assert_eq!(true, tree.validate(&proof));
+    /// assert_eq!(true, validator.validate(&proof));
+    ///
+    /// tree.remove(&2);
+    /// let more_recent_proof = tree.get_proof(&1).unwrap();
+    /// assert_eq!(true, tree.validate(&more_recent_proof));
+    /// assert_eq!(false, validator.validate(&more_recent_proof));
+    /// ```
+    pub fn get_validator(&self) -> Validator<K, V> {
+        match &self.root {
+            None => Tree {
+                root: Some(Placeholder::default().into()),
+            },
+            Some(n) => Tree {
+                root: Some(Placeholder::from(n).into()),
+            },
+        }
+    }
 }
 
 /// A merkle proof. Used in the context of a *validating* tree (usually incomplete).
 pub type Proof<K, V> = Tree<K, V>;
 
+/// A merkle tree with only the root node (placeholder). Used as a summary of the tree.
+pub type Validator<K, V> = Tree<K, V>;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::MerkleError::{KeyBehindPlaceholder, KeyNonExistant};
 
     #[test]
-    fn insert() {
+    fn get1() {
+        let mut tree = Tree::new();
+        tree.insert(1, "a");
+
+        assert_eq!(tree.get(&1), Ok(&"a"));
+    }
+
+    #[test]
+    fn get_err_non_existant() {
+        let mut tree = Tree::new();
+        tree.insert(1, "a");
+
+        assert_eq!(tree.get(&2), Err(KeyNonExistant));
+    }
+
+    #[test]
+    fn get_err() {
+        let mut tree = Tree::new();
+        tree.insert("Aaron", 1);
+        tree.insert("Bob", 1);
+        let proof = tree.get_proof("Aaron").unwrap();
+
+        assert_eq!(proof.get("Bob"), Err(KeyBehindPlaceholder));
+    }
+
+    #[test]
+    fn insert1() {
         let mut tree = Tree::new();
         assert_eq!(tree.insert("Alice", 1), None);
+
         tree.insert("Alice", 2);
         assert_eq!(tree.insert("Alice", 3), Some(2));
         assert_eq!(tree.get("Alice"), Ok(&3));
+    }
+
+    #[test]
+    fn remove1() {
+        let mut tree = Tree::new();
+        tree.insert("Alice", 1);
+        assert_eq!(tree.get("Alice"), Ok(&1));
+
+        assert_eq!(tree.remove("Alice"), Some(1));
+        assert_eq!(tree.get("Alice"), Err(KeyNonExistant));
+
+        assert_eq!(tree.remove("Alice"), None);
+    }
+
+    #[test]
+    fn get_proof1() {
+        let mut tree = Tree::new();
+        tree.insert("Aaron", 1);
+        tree.insert("Bob", 2);
+        tree.insert("Charlie", 3);
+
+        let proof = tree.get_proof("Bob").unwrap();
+        assert_eq!(proof.get("Bob"), Ok(&2));
+        assert_eq!(proof.get("Aaron"), Err(KeyBehindPlaceholder));
+        assert_eq!(proof.get("Charlie"), Err(KeyBehindPlaceholder));
+    }
+
+    #[test]
+    fn get_proof2() {
+        let mut tree = Tree::new();
+        tree.insert("Aaron", 1);
+        tree.insert("Bob", 2);
+        tree.insert("Charlie", 3);
+
+        let proof = tree.get_proof("Alice").unwrap();
+
+        assert_eq!(proof.get("Alice"), Err(KeyNonExistant));
+    }
+
+    #[test]
+    fn get_proof_err_behind_placeholder() {
+        let mut tree = Tree::new();
+        tree.insert("Aaron", 1); // R
+        tree.insert("Bob", 2); // L,...
+        tree.insert("Charlie", 3); // L,...
+
+        let proof = tree.get_proof("Charlie").unwrap();
+
+        assert_eq!(proof.get("Aaron"), Err(KeyBehindPlaceholder));
+
+        let err = proof.get_proof("Aaron").unwrap_err();
+        assert_eq!(err, KeyBehindPlaceholder);
+    }
+
+    #[test]
+    fn validate1() {
+        let mut tree = Tree::new();
+        tree.insert("Aaron", 1); // R
+        tree.insert("Bob", 2); // L,...
+        tree.insert("Charlie", 3); // L,...
+
+        let proof = tree.get_proof("Charlie").unwrap();
+        assert!(tree.validate(&proof));
+    }
+
+    #[test]
+    fn validate2() {
+        let mut tree = Tree::new();
+        tree.insert("Aaron", 1); // R
+        tree.insert("Bob", 2); // L,...
+        tree.insert("Charlie", 3); // L,...
+
+        let proof = tree.get_proof("Charlie").unwrap();
+
+        tree.insert("Natalie", 4);
+
+        assert!(!tree.validate(&proof));
+    }
+
+    #[test]
+    fn get_validator1() {
+        let mut tree = Tree::new();
+        tree.insert(1, "a");
+        tree.insert(2, "b");
+
+        let validator = tree.get_validator();
+
+        let proof = tree.get_proof(&1).unwrap();
+        assert_eq!(true, tree.validate(&proof));
+        assert_eq!(true, validator.validate(&proof));
+
+        tree.remove(&1);
+        let more_recent_proof = tree.get_proof(&2).unwrap();
+        assert_eq!(true, tree.validate(&more_recent_proof));
+        assert_eq!(false, validator.validate(&more_recent_proof));
     }
 }
