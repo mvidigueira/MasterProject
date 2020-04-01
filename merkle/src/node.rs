@@ -1,7 +1,9 @@
 // TODO: REMOVE THIS LATER!
 #![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
+use std::convert::TryFrom;
 
 use drop::crypto::{self, Digest};
 use std::fmt;
@@ -17,6 +19,15 @@ pub fn bit(arr: &[u8; 32], index: u8) -> bool {
     let sub_index: u8 = 1 << (7 - (index % 8));
     (byte & sub_index) > 0
 }
+
+macro_rules! h2d {
+    ($data:expr) => {
+        Digest::try_from($data).expect("failed to create digest")
+    };
+}
+
+const DEFAULT_HASH_DATA: &str =
+    "0000000000000000000000000000000000000000000000000000000000000000";
 
 pub trait Hashable {
     fn hash(&self) -> Digest;
@@ -161,7 +172,7 @@ where
         k: &Q,
         depth: u32,
         k_digest: &Digest,
-    ) -> Result<&V, MerkleError> 
+    ) -> Result<&V, MerkleError>
     where
         K: Borrow<Q>,
         Q: Serialize + Eq,
@@ -222,10 +233,14 @@ where
     ///
     /// Behaviour is currently unspecified for the `Placeholder` variant,
     /// panicking with unimplemented!(...).
-    pub fn remove<Q: ?Sized>(self, k: &Q, depth: u32) -> (Option<V>, Option<Self>)
+    pub fn remove<Q: ?Sized>(
+        self,
+        k: &Q,
+        depth: u32,
+    ) -> (Option<V>, Option<Self>)
     where
-    K: Borrow<Q>,
-    Q: Serialize + Eq,
+        K: Borrow<Q>,
+        Q: Serialize + Eq,
     {
         let d = crypto::hash(&k).unwrap();
         self.remove_internal(k, depth, &d)
@@ -241,7 +256,7 @@ where
         k: &Q,
         depth: u32,
         k_digest: &Digest,
-    ) -> (Option<V>, Option<Self>) 
+    ) -> (Option<V>, Option<Self>)
     where
         K: Borrow<Q>,
         Q: Serialize + Eq,
@@ -342,7 +357,7 @@ where
         &self.v
     }
 
-    fn get_internal<Q: ?Sized>(&self, k: &Q) -> Result<&V, MerkleError> 
+    fn get_internal<Q: ?Sized>(&self, k: &Q) -> Result<&V, MerkleError>
     where
         K: Borrow<Q>,
         Q: Serialize + Eq,
@@ -382,7 +397,7 @@ where
         }
     }
 
-    fn remove_internal<Q: ?Sized>(self, k: &Q) -> (Option<V>, Option<Self>) 
+    fn remove_internal<Q: ?Sized>(self, k: &Q) -> (Option<V>, Option<Self>)
     where
         K: Borrow<Q>,
         Q: Serialize + Eq,
@@ -415,7 +430,7 @@ where
             panic!("Internal node must have at least one child.")
         }
 
-        let default_hash = crypto::hash(&0).unwrap();
+        let default_hash = h2d!(DEFAULT_HASH_DATA);
         let left_h = match &self.left {
             Some(x) => x.as_ref().hash(),
             None => default_hash,
@@ -466,21 +481,20 @@ where
         k: &Q,
         depth: u32,
         k_digest: &Digest,
-    ) -> Result<&V, MerkleError> 
+    ) -> Result<&V, MerkleError>
     where
         K: Borrow<Q>,
         Q: Serialize + Eq,
     {
-        if bit(k_digest.as_ref(), depth as u8) {
-            match &self.right {
-                Some(n) => n.as_ref().get_internal(k, depth + 1, k_digest),
-                None => Err(KeyNonExistant),
-            }
+        let side = if bit(k_digest.as_ref(), depth as u8) {
+            &self.right
         } else {
-            match &self.left {
-                Some(n) => n.as_ref().get_internal(k, depth + 1, k_digest),
-                None => Err(KeyNonExistant),
-            }
+            &self.left
+        };
+
+        match side {
+            Some(n) => n.as_ref().get_internal(k, depth + 1, k_digest),
+            None => Err(KeyNonExistant),
         }
     }
 
@@ -497,21 +511,17 @@ where
             &mut self.left
         };
 
-        if side.is_none() {
-            *side = Some(Box::new(Leaf::new(k, v).into()));
-            (None, self)
-        } else {
-            match side.take().unwrap().insert_internal(
-                k,
-                v,
-                depth + 1,
-                k_digest,
-            ) {
+        match side.take() {
+            None => {
+                *side = Some(Box::new(Leaf::new(k, v).into()));
+                (None, self)
+            }
+            Some(n) => match n.insert_internal(k, v, depth + 1, k_digest) {
                 (o @ _, n @ _) => {
                     *side = Some(Box::new(n));
                     (o, self)
                 }
-            }
+            },
         }
     }
 
@@ -520,50 +530,36 @@ where
         k: &Q,
         depth: u32,
         k_digest: &Digest,
-    ) -> (Option<V>, Node<K, V>) 
+    ) -> (Option<V>, Node<K, V>)
     where
         K: Borrow<Q>,
         Q: Serialize + Eq,
     {
-        if bit(k_digest.as_ref(), depth as u8) {
-            if self.right.is_none() {
-                return (None, self.into());
-            }
-            let r = self.right.unwrap().remove_internal(k, depth + 1, k_digest);
-            self.right = match r.1 {
-                Some(a) => Some(Box::new(a)),
-                None => None,
-            };
-
-            match (&self.left, &self.right) {
-                (None, None) => panic!("Impossible"),
-                (Some(n), None) if !n.is_internal() => {
-                    return (r.0, *self.left.unwrap())
-                }
-                (None, Some(n)) if !n.is_internal() => {
-                    return (r.0, *self.right.unwrap())
-                }
-                _ => (r.0, self.into()),
-            }
+        let side = if bit(k_digest.as_ref(), depth as u8) {
+            &mut self.right
         } else {
-            if self.left.is_none() {
-                return (None, self.into());
-            }
-            let r = self.left.unwrap().remove_internal(k, depth + 1, k_digest);
-            self.left = match r.1 {
-                Some(a) => Some(Box::new(a)),
-                None => None,
-            };
+            &mut self.left
+        };
 
-            match (&self.left, &self.right) {
-                (None, None) => panic!("Impossible"),
-                (Some(n), None) if !n.is_internal() => {
-                    return (r.0, *self.left.unwrap())
+        match side.take() {
+            None => (None, self.into()),
+            Some(n) => {
+                let r = n.remove_internal(k, depth + 1, k_digest);
+                *side = match r.1 {
+                    Some(a) => Some(Box::new(a)),
+                    None => None,
+                };
+
+                match (&self.left, &self.right) {
+                    (None, None) => panic!("Impossible"),
+                    (Some(n), None) if !n.is_internal() => {
+                        (r.0, *self.left.unwrap())
+                    }
+                    (None, Some(n)) if !n.is_internal() => {
+                        (r.0, *self.right.unwrap())
+                    }
+                    _ => (r.0, self.into()),
                 }
-                (None, Some(n)) if !n.is_internal() => {
-                    return (r.0, *self.right.unwrap())
-                }
-                _ => (r.0, self.into()),
             }
         }
     }
@@ -572,6 +568,14 @@ where
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Copy)]
 pub struct Placeholder {
     d: Digest,
+}
+
+impl Default for Placeholder {
+    fn default() -> Self {
+        Placeholder {
+            d: h2d!(DEFAULT_HASH_DATA),
+        }
+    }
 }
 
 impl fmt::Debug for Placeholder {
@@ -687,7 +691,10 @@ where
     V: Serialize + Clone,
 {
     #![allow(dead_code)]
-    fn get_proof_single_internal<Q: ?Sized>(&self, key: &Q) -> Result<Self, MerkleError>
+    fn get_proof_single_internal<Q: ?Sized>(
+        &self,
+        key: &Q,
+    ) -> Result<Self, MerkleError>
     where
         K: Borrow<Q>,
         Q: Serialize + Eq,
@@ -695,7 +702,7 @@ where
         if self.k.borrow() == key {
             Ok(self.clone()) // Proof of Existence
         } else {
-            Ok(self.clone()) // Proof of Deniability 
+            Ok(self.clone()) // Proof of Deniability
         }
     }
 }
@@ -752,7 +759,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::convert::TryFrom;
 
     #[test]
     fn test_bit() {
@@ -764,12 +770,6 @@ mod tests {
         assert_eq!(bit(u, 1), false);
         assert_eq!(bit(u, 8), false);
         assert_eq!(bit(u, 9), true);
-    }
-
-    macro_rules! h2d {
-        ($data:expr) => {
-            Digest::try_from($data).expect("failed to create digest")
-        };
     }
 
     // CONSTRUCTOR TESTS
@@ -1352,7 +1352,7 @@ mod tests {
     #[should_panic(expected = "KeyNonExistant")]
     fn leaf_get_proof_single_err() {
         let l = Leaf::new("Alice", 1);
-        let p: Node<_,_> = l.get_proof_single_internal("Bob").unwrap().into();
+        let p: Node<_, _> = l.get_proof_single_internal("Bob").unwrap().into();
         p.get("Bob", 0).unwrap();
     }
 
