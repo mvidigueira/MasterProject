@@ -12,11 +12,12 @@ use serde::{Deserialize, Serialize, Deserializer};
 /// a brief explanation.
 ///
 /// Note that this is unlike normal merkle trees following the [RFC6962](https://tools.ietf.org/html/rfc6962)
-/// standard which are generally balanced, and for which the order of key-value pairs
+/// standard which are generally balanced, and for whi
+/// ch the order of key-value pairs
 /// in the tree is determined by the order of insertion.
 ///
-/// The default hashing algorithm is currently SHA256, though this is
-/// subject to change at any point in the future.
+/// The default hashing algorithm is currently SHA256 (see [`hash`]), though this
+/// is subject to change at any point in the future.
 ///
 /// It is required that the keys implement the [`Eq`], [`Serialize`], and [`Clone`]
 /// traits, although this can frequently be achieved by using
@@ -25,13 +26,13 @@ use serde::{Deserialize, Serialize, Deserializer};
 /// property holds:
 ///
 /// ```text
-/// k1 == k2 -> k1.serialize(S) == k2.serialize(S)
+/// k1 == k2 -> hash(k1) == hash(k2)
 /// ```
 ///
-/// In other words, if two keys are equal, their serialization must be equal.
+/// In other words, if two keys are equal, their hashes must be equal.
 ///
 /// It is a logic error for a key to be modified in such a way that the key's
-/// serialization, as determined by the [`Serialize`] trait, or its equality,
+/// hash, as determined by the [`hash`] function, or its equality,
 /// as determined by the [`Eq`] trait, changes while it is in the tree. This
 /// is normally only possible through [`Cell`], [`RefCell`], global state, I/O,
 /// or unsafe code.
@@ -96,10 +97,27 @@ use serde::{Deserialize, Serialize, Deserializer};
 ///
 /// [`Eq`]: https://doc.rust-lang.org/std/cmp/trait.Eq.html
 /// [`Serialize`]: https://docs.serde.rs/serde/trait.Serialize.html
+/// [`Deserialize`]: https://docs.serde.rs/serde/trait.Deserialize.html
 /// [`Clone`]: https://doc.rust-lang.org/std/clone/trait.Clone.html
 /// [`RefCell`]: https://doc.rust-lang.org/std/cell/struct.RefCell.html
 /// [`Cell`]: https://doc.rust-lang.org/std/cell/struct.Cell.html
+/// [`hash`]: ../drop/crypto/hash/fn.hash.html
 ///
+/// # Caching and Hash recomputation
+/// 
+/// For trees with large numbers of records, computing the root hash from
+/// scratch after every modification can be very costly.
+/// 
+/// To avoid unnecessary recomputation after each modification, each
+/// internal node in a tree caches its digest. This digest is only 
+/// updated on an as-needed basis, e.g. when the node lies along the path
+/// of a modification, such as an insertion or removal.
+/// 
+/// It is important to note that all cached values in a tree are skipped
+/// on serialization ([`Serialize`]) and recomputed on deserialization
+/// ([`Deserialize`]), thus ensuring that they are locally valid at all
+/// times, in spite of any prior malicious tampering that might have happened.
+/// 
 /// # One-to-one mapping of key-value pairs.
 ///
 /// Key-Value pairs are placed in the tree along the path corresponding to the hash of their keys.
@@ -138,6 +156,15 @@ use serde::{Deserialize, Serialize, Deserializer};
 ///          k2   k3
 /// ```
 
+#[derive(Debug, Serialize, Default)]
+pub struct Tree<K, V>
+where
+    K: Serialize + Clone + Eq,
+    V: Serialize + Clone,
+{
+    root: Option<Node<K, V>>,
+}
+
 // Special trick to have serde deserialize call a finalize hook at the end.
 // This is necessary to correctly set the cached digests (update_cache_recursive).
 impl<'de, K, V> Deserialize<'de> for Tree<K, V>
@@ -171,15 +198,6 @@ where
             }
         }
     }
-}
-
-#[derive(Debug, Serialize, Default)]
-pub struct Tree<K, V>
-where
-    K: Serialize + Clone + Eq,
-    V: Serialize + Clone,
-{
-    root: Option<Node<K, V>>,
 }
 
 impl<K, V> Tree<K, V>
