@@ -277,13 +277,21 @@ where
 
     pub fn merge_unchecked(&mut self, other: &Self) {
         match (self, other) {
-            (Node::Internal(mine), Node::Internal(other)) => mine.merge_unchecked(other),
+            (Node::Internal(mine), Node::Internal(other)) => {
+                mine.merge_unchecked(other)
+            }
             (Node::Internal(_), Node::Placeholder(_)) => (), // assuming the hashes are equal (unchecked)
-            (Node::Internal(_), Node::Leaf(_)) => { panic!("The trees should be compatible but are not"); },
-            (Node::Leaf(_), Node::Internal(_)) => { panic!("The trees should be compatible but are not"); },
+            (Node::Internal(_), Node::Leaf(_)) => {
+                panic!("The trees should be compatible but are not");
+            }
+            (Node::Leaf(_), Node::Internal(_)) => {
+                panic!("The trees should be compatible but are not");
+            }
             (Node::Leaf(_), Node::Placeholder(_)) => (), // assuming the hashes are equal (unchecked)
-            (Node::Leaf(_), Node::Leaf(_)) => (),        // assuming the leaves are equal (unchecked)
-            (Node::Placeholder(_), _) => { panic!("This code should never be reached"); },
+            (Node::Leaf(_), Node::Leaf(_)) => (), // assuming the leaves are equal (unchecked)
+            (Node::Placeholder(_), _) => {
+                panic!("This code should never be reached");
+            }
         }
     }
 }
@@ -579,30 +587,34 @@ where
     fn merge_unchecked(&mut self, other: &Self) {
         match (&mut self.left, other.left()) {
             (None, None) => (),
-            (Some(a), Some(b)) if a.is_placeholder() && b.is_placeholder() => (),
+            (Some(a), Some(b)) if a.is_placeholder() && b.is_placeholder() => {
+                ()
+            }
             (Some(a), Some(b)) if a.is_placeholder() => {
                 self.left = Some(Box::new(b.clone()));
             }
             (Some(a), Some(b)) => {
                 a.merge_unchecked(b);
-            },
+            }
             (_, _) => {
                 panic!("The trees should be compatible but are not");
-            },
+            }
         }
 
         match (&mut self.right, other.right()) {
             (None, None) => (),
-            (Some(a), Some(b)) if a.is_placeholder() && b.is_placeholder() => (),
+            (Some(a), Some(b)) if a.is_placeholder() && b.is_placeholder() => {
+                ()
+            }
             (Some(a), Some(b)) if a.is_placeholder() => {
                 self.right = Some(Box::new(b.clone()));
             }
             (Some(a), Some(b)) => {
                 a.merge_unchecked(b);
-            },
+            }
             (_, _) => {
                 panic!("The trees should be compatible but are not");
-            },
+            }
         }
     }
 }
@@ -1489,7 +1501,7 @@ mod tests {
 
     #[test]
     fn leaf_merge() {
-        let mut l: Node<_,_> = Leaf::new("Alice", 3).into();
+        let mut l: Node<_, _> = Leaf::new("Alice", 3).into();
         let l2 = l.clone();
 
         l.merge_unchecked(&l2);

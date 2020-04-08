@@ -298,7 +298,7 @@ where
     ///
     /// [`Eq`]: https://doc.rust-lang.org/std/cmp/trait.Eq.html
     /// [`Serialize`]: https://docs.serde.rs/serde/trait.Serialize.html
-    /// 
+    ///
     /// # Errors
     /// If the tree cannot determine if the key does or does not exist
     /// (e.g. locally part of the tree is missing, replaced by a placeholder), [`KeyBehindPlaceholder`] is returned.
@@ -412,7 +412,7 @@ where
     }
 
     /// Merges two *compatible* trees, modifying the first.
-    /// 
+    ///
     /// Concretely, it replaces placeholders in the first tree with the concrete sub-trees
     /// in the second tree. The first tree is therefore extended with the missing information
     /// (key-value associations) that the second tree possesses.
@@ -423,7 +423,7 @@ where
     /// If the trees are not compatible, [`IncompatibleTrees`] is returned.
     ///
     /// [`IncompatibleTrees`]: error/enum.MerkleError.html
-    /// 
+    ///
     /// # Examples
     ///
     /// ```
@@ -436,12 +436,12 @@ where
     ///
     /// let proof1 = tree.get_proof(&1).unwrap();
     /// let proof2 = tree.get_proof(&2).unwrap();
-    /// 
+    ///
     /// let mut validator = tree.get_validator();
     ///
     /// validator.merge(&proof1);
     /// validator.merge(&proof2);
-    /// 
+    ///
     /// assert_eq!(validator.get(&1), Ok(&"a"));
     /// assert_eq!(validator.get(&2), Ok(&"b"));
     /// ```
@@ -458,15 +458,15 @@ where
         }
 
         match (&mut self.root, &other.root) {
-            (None, _) => (),    // right must be default placeholder
-            (_, None) => (),    // left must be default placeholder
+            (None, _) => (), // right must be default placeholder
+            (_, None) => (), // left must be default placeholder
             (Some(Node::Placeholder(_)), Some(Node::Placeholder(_))) => (),
-            (Some(Node::Placeholder(_)), Some(n)) => { 
+            (Some(Node::Placeholder(_)), Some(n)) => {
                 self.root = Some(n.clone());
-            },
+            }
             (Some(a), Some(b)) => {
                 a.merge_unchecked(b);
-            },
+            }
         };
 
         Ok(())
@@ -482,7 +482,9 @@ pub type Validator<K, V> = Tree<K, V>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::MerkleError::{KeyBehindPlaceholder, KeyNonExistant, IncompatibleTrees};
+    use crate::error::MerkleError::{
+        IncompatibleTrees, KeyBehindPlaceholder, KeyNonExistant,
+    };
 
     #[test]
     fn get1() {
@@ -620,15 +622,15 @@ mod tests {
         let mut tree = Tree::new();
         tree.insert(1, "a");
         tree.insert(2, "b");
-    
+
         let proof1 = tree.get_proof(&1).unwrap();
         let proof2 = tree.get_proof(&2).unwrap();
-    
+
         let mut validator = tree.get_validator();
-    
+
         assert_eq!(validator.merge(&proof1), Ok(()));
         assert_eq!(validator.merge(&proof2), Ok(()));
-    
+
         assert_eq!(validator.get(&1), Ok(&"a"));
         assert_eq!(validator.get(&2), Ok(&"b"));
     }
@@ -636,15 +638,15 @@ mod tests {
     #[test]
     fn merge_err() {
         let mut tree = Tree::new();
-        
+
         tree.insert(1, "a");
         let proof1 = tree.get_proof(&1).unwrap();
 
         tree.insert(2, "b");
         let proof2 = tree.get_proof(&2).unwrap();
-    
+
         let mut validator = tree.get_validator();
-    
+
         assert_eq!(validator.merge(&proof1), Err(IncompatibleTrees));
         assert_eq!(validator.merge(&proof2), Ok(()));
     }
