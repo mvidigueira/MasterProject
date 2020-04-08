@@ -1,7 +1,7 @@
 use crate::node::{Hashable, Leaf, MerkleError, Node, Placeholder};
 use std::borrow::Borrow;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Deserializer};
 
 /// A merkle tree supporting both existence and deniability proofs.
 ///
@@ -140,17 +140,6 @@ use serde::{Deserialize, Serialize};
 
 // Special trick to have serde deserialize call a finalize hook at the end.
 // This is necessary to correctly set the cached digests (update_cache_recursive).
-#[derive(Debug, Serialize, Deserialize, Default)]
-struct TreeDeser<K,V>
-where
-    K: Serialize + Clone + Eq,
-    V: Serialize + Clone,
-{
-    root: Option<Node<K, V>>,
-}
-
-use serde::de::{Deserializer};
-
 impl<'de, K, V> Deserialize<'de> for Tree<K, V>
 where
     K: Serialize + Clone + Eq + Deserialize<'de>,
@@ -160,12 +149,19 @@ where
     where
         D: Deserializer<'de>,
     {
-        let r: Result<TreeDeser<K,V>, D::Error> = TreeDeser::deserialize(deserializer);
-        match r {
+        #[derive(Debug, Serialize, Deserialize, Default)]
+        struct TreeDeser<K,V>
+        where
+            K: Serialize + Clone + Eq,
+            V: Serialize + Clone,
+        {
+            root: Option<Node<K, V>>,
+        }
+
+        match TreeDeser::deserialize(deserializer) {
             Err(e) => Err(e),
             Ok(mut td) => {
-                let o = td.root.take();
-                match o {
+                match td.root.take() {
                     Some(mut n) => { 
                         n.update_cache_recursive();
                         Ok(Tree{ root: Some(n) })

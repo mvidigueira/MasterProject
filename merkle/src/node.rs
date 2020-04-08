@@ -295,6 +295,10 @@ where
         }
     }
 
+    /// Updates the digest caches recursively (stopping at nodes that already have them updated).
+    /// 
+    /// Nodes maintain the following invariant between method executions:
+    /// - Digest caches are always updated.
     pub fn update_cache_recursive(&mut self) {
         match self {
             Node::Internal(i) => i.update_cache_recursive(),
