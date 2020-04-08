@@ -138,7 +138,46 @@ use serde::{Deserialize, Serialize};
 ///          k2   k3
 /// ```
 
+// Special trick to have serde deserialize call a finalize hook at the end.
+// This is necessary to correctly set the cached digests (update_cache_recursive).
 #[derive(Debug, Serialize, Deserialize, Default)]
+struct TreeDeser<K,V>
+where
+    K: Serialize + Clone + Eq,
+    V: Serialize + Clone,
+{
+    root: Option<Node<K, V>>,
+}
+
+use serde::de::{Deserializer};
+
+impl<'de, K, V> Deserialize<'de> for Tree<K, V>
+where
+    K: Serialize + Clone + Eq + Deserialize<'de>,
+    V: Serialize + Clone + Deserialize<'de>,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let r: Result<TreeDeser<K,V>, D::Error> = TreeDeser::deserialize(deserializer);
+        match r {
+            Err(e) => Err(e),
+            Ok(mut td) => {
+                let o = td.root.take();
+                match o {
+                    Some(mut n) => { 
+                        n.update_cache_recursive();
+                        Ok(Tree{ root: Some(n) })
+                    },
+                    None => Ok(Tree{ root: None }),
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Default)]
 pub struct Tree<K, V>
 where
     K: Serialize + Clone + Eq,
@@ -298,7 +337,7 @@ where
     ///
     /// [`Eq`]: https://doc.rust-lang.org/std/cmp/trait.Eq.html
     /// [`Serialize`]: https://docs.serde.rs/serde/trait.Serialize.html
-    ///
+    /// 
     /// # Errors
     /// If the tree cannot determine if the key does or does not exist
     /// (e.g. locally part of the tree is missing, replaced by a placeholder), [`KeyBehindPlaceholder`] is returned.
@@ -412,7 +451,7 @@ where
     }
 
     /// Merges two *compatible* trees, modifying the first.
-    ///
+    /// 
     /// Concretely, it replaces placeholders in the first tree with the concrete sub-trees
     /// in the second tree. The first tree is therefore extended with the missing information
     /// (key-value associations) that the second tree possesses.
@@ -423,7 +462,7 @@ where
     /// If the trees are not compatible, [`IncompatibleTrees`] is returned.
     ///
     /// [`IncompatibleTrees`]: error/enum.MerkleError.html
-    ///
+    /// 
     /// # Examples
     ///
     /// ```
@@ -436,12 +475,12 @@ where
     ///
     /// let proof1 = tree.get_proof(&1).unwrap();
     /// let proof2 = tree.get_proof(&2).unwrap();
-    ///
+    /// 
     /// let mut validator = tree.get_validator();
     ///
     /// validator.merge(&proof1);
     /// validator.merge(&proof2);
-    ///
+    /// 
     /// assert_eq!(validator.get(&1), Ok(&"a"));
     /// assert_eq!(validator.get(&2), Ok(&"b"));
     /// ```
@@ -458,15 +497,15 @@ where
         }
 
         match (&mut self.root, &other.root) {
-            (None, _) => (), // right must be default placeholder
-            (_, None) => (), // left must be default placeholder
+            (None, _) => (),    // right must be default placeholder
+            (_, None) => (),    // left must be default placeholder
             (Some(Node::Placeholder(_)), Some(Node::Placeholder(_))) => (),
-            (Some(Node::Placeholder(_)), Some(n)) => {
+            (Some(Node::Placeholder(_)), Some(n)) => { 
                 self.root = Some(n.clone());
-            }
+            },
             (Some(a), Some(b)) => {
                 a.merge_unchecked(b);
-            }
+            },
         };
 
         Ok(())
@@ -482,9 +521,7 @@ pub type Validator<K, V> = Tree<K, V>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::MerkleError::{
-        IncompatibleTrees, KeyBehindPlaceholder, KeyNonExistant,
-    };
+    use crate::error::MerkleError::{KeyBehindPlaceholder, KeyNonExistant, IncompatibleTrees};
 
     #[test]
     fn get1() {
@@ -600,6 +637,25 @@ mod tests {
     }
 
     #[test]
+    fn validate_ser_de() {
+        let mut tree = Tree::new();
+        tree.insert("Aaron", 1); // R
+        tree.insert("Bob", 2); // L,...
+        tree.insert("Charlie", 3); // L,...
+
+        let proof = tree.get_proof("Charlie").unwrap();
+        
+        extern crate bincode;
+
+        let ser = bincode::serialize(&proof).unwrap();
+        let proof: Proof<_,_> = bincode::deserialize(&ser).unwrap();
+        
+        //proof.root.as_mut().unwrap().update_cache_recursive();
+
+        assert!(tree.validate(&proof));
+    }
+
+    #[test]
     fn get_validator1() {
         let mut tree = Tree::new();
         tree.insert(1, "a");
@@ -622,15 +678,15 @@ mod tests {
         let mut tree = Tree::new();
         tree.insert(1, "a");
         tree.insert(2, "b");
-
+    
         let proof1 = tree.get_proof(&1).unwrap();
         let proof2 = tree.get_proof(&2).unwrap();
-
+    
         let mut validator = tree.get_validator();
-
+    
         assert_eq!(validator.merge(&proof1), Ok(()));
         assert_eq!(validator.merge(&proof2), Ok(()));
-
+    
         assert_eq!(validator.get(&1), Ok(&"a"));
         assert_eq!(validator.get(&2), Ok(&"b"));
     }
@@ -638,15 +694,15 @@ mod tests {
     #[test]
     fn merge_err() {
         let mut tree = Tree::new();
-
+        
         tree.insert(1, "a");
         let proof1 = tree.get_proof(&1).unwrap();
 
         tree.insert(2, "b");
         let proof2 = tree.get_proof(&2).unwrap();
-
+    
         let mut validator = tree.get_validator();
-
+    
         assert_eq!(validator.merge(&proof1), Err(IncompatibleTrees));
         assert_eq!(validator.merge(&proof2), Ok(()));
     }

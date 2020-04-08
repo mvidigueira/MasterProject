@@ -294,6 +294,14 @@ where
             }
         }
     }
+
+    pub fn update_cache_recursive(&mut self) {
+        match self {
+            Node::Internal(i) => i.update_cache_recursive(),
+            Node::Placeholder(_) => (),
+            Node::Leaf(_) => (),
+        } 
+    }
 }
 
 impl<K, V> Hashable for Node<K, V>
@@ -431,6 +439,33 @@ where
 }
 
 #[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone)]
+struct DigestCache {
+    digest: Digest,
+    updated: bool,
+}
+
+impl Default for DigestCache {
+    fn default() -> Self {
+        DigestCache{ digest: h2d!(DEFAULT_HASH_DATA), updated: false }
+    }
+}
+
+impl DigestCache {
+    fn is_updated(&self) -> bool {
+        self.updated
+    }
+
+    fn update(&mut self, d: Digest) {
+        self.digest = d;
+        self.updated = true;
+    }
+
+    fn outdate(&mut self) {
+        self.updated = false;
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone)]
 pub struct Internal<K, V>
 where
     K: Serialize + Clone + Eq,
@@ -438,6 +473,9 @@ where
 {
     left: Option<Box<Node<K, V>>>,
     right: Option<Box<Node<K, V>>>,
+
+    #[serde(skip)]
+    cached: DigestCache,
 }
 
 impl<K, V> Hashable for Internal<K, V>
@@ -450,17 +488,11 @@ where
             panic!("Internal node must have at least one child.")
         }
 
-        let default_hash = h2d!(DEFAULT_HASH_DATA);
-        let left_h = match &self.left {
-            Some(x) => x.as_ref().hash(),
-            None => default_hash,
-        };
-        let right_h = match &self.right {
-            Some(x) => x.as_ref().hash(),
-            None => default_hash,
-        };
-
-        crypto::hash(&(left_h, right_h)).unwrap()
+        if self.cached.is_updated() {
+            return self.cached.digest;
+        } else {
+            panic!("Cached digest is not updated!");
+        }
     }
 }
 
@@ -478,18 +510,55 @@ where
             Some(n) => Some(Box::new(n)),
             None => None,
         };
-        let i = Internal { left, right };
+        let mut i = Internal { left, right, cached: DigestCache::default() };
+        i.update_digest();
         i
     }
 
-    pub fn left(&self) -> Option<&Node<K, V>> {
+    fn update_cache_recursive(&mut self) {
+        if !self.cached.is_updated() {
+            match &mut self.left {
+                Some(n) => n.update_cache_recursive(),
+                None => (),
+            };
+    
+            match &mut self.right {
+                Some(n) => n.update_cache_recursive(),
+                None => (),
+            };
+            
+            self.update_digest();
+        }
+    }
+
+    fn update_digest(&mut self) {
+        let default_hash = h2d!(DEFAULT_HASH_DATA);
+
+        let left_h = match &self.left {
+            Some(x) => x.as_ref().hash(),
+            None => default_hash,
+        };
+        let right_h = match &self.right {
+            Some(x) => x.as_ref().hash(),
+            None => default_hash,
+        };
+        
+        let hash = crypto::hash(&(left_h, right_h)).unwrap();
+        self.cached.update(hash);
+    }
+
+    fn outdate_digest(&mut self) {
+        self.cached.outdate();
+    }
+
+    fn left(&self) -> Option<&Node<K, V>> {
         match &self.left {
             None => None,
             Some(b) => Some(b.as_ref()),
         }
     }
 
-    pub fn right(&self) -> Option<&Node<K, V>> {
+    fn right(&self) -> Option<&Node<K, V>> {
         match &self.right {
             None => None,
             Some(b) => Some(b.as_ref()),
@@ -525,6 +594,8 @@ where
         depth: u32,
         k_digest: &Digest,
     ) -> (Option<V>, Self) {
+        self.outdate_digest();
+
         let side = if bit(k_digest.as_ref(), depth as u8) {
             &mut self.right
         } else {
@@ -534,11 +605,13 @@ where
         match side.take() {
             None => {
                 *side = Some(Box::new(Leaf::new(k, v).into()));
+                self.update_digest();
                 (None, self)
             }
             Some(n) => match n.insert_internal(k, v, depth + 1, k_digest) {
                 (o @ _, n @ _) => {
                     *side = Some(Box::new(n));
+                    self.update_digest();
                     (o, self)
                 }
             },
@@ -578,7 +651,10 @@ where
                     (None, Some(n)) if !n.is_internal() => {
                         (r.0, *self.right.unwrap())
                     }
-                    _ => (r.0, self.into()),
+                    _ => {
+                        self.update_digest();
+                        (r.0, self.into())
+                    }
                 }
             }
         }
@@ -1387,6 +1463,34 @@ mod tests {
 
         assert_eq!(g.get("Bob", 0), Ok(&0x02));
         assert_eq!(g.get("Charlie", 0), Ok(&0x03));
+    }
+
+    #[test]
+    #[should_panic(expected = "Cached digest is not updated!")]
+    fn ser_de_err() {
+        let i: Node<_, _> = Leaf::new("Bob", 0x02).into(); // L,R,R,L,L,L,R,R
+        let (_, i) = i.insert("Charlie", 0x03, 0); // L,R,R,L,L,L,R,L
+
+        extern crate bincode;
+
+        let ser = bincode::serialize(&i).unwrap();
+        let g: Node<&str, i32> = bincode::deserialize(&ser).unwrap();
+
+        g.hash();
+    }
+
+    #[test]
+    fn ser_de_update_cache_recursive() {
+        let i: Node<_, _> = Leaf::new("Bob", 0x02).into(); // L,R,R,L,L,L,R,R
+        let (_, i) = i.insert("Charlie", 0x03, 0); // L,R,R,L,L,L,R,L
+
+        extern crate bincode;
+
+        let ser = bincode::serialize(&i).unwrap();
+        let mut g: Node<&str, i32> = bincode::deserialize(&ser).unwrap();
+
+        g.update_cache_recursive();
+        g.hash();
     }
 
     // PROOF TESTS
