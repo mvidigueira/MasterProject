@@ -2,3 +2,4 @@ rules_playtest/target
 rules_playtest/contracts/target
 rules_playtest/common/target
 merkle/target
+rain/target
