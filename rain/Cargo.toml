@@ -8,4 +8,13 @@ edition = "2018"
 
 [dependencies]
 drop = { path = "/home/manuel/Documents/M4/rust_playground/drop" }
+macros = { path = "/home/manuel/Documents/M4/rust_playground/drop/macros" }
 merkle = { path = "../merkle" }
+# classic = { path = "/home/manuel/Documents/M4/rust_playground/classic" }
+tokio = "0.2.0"
+futures = "0.3.4"
+tracing = "0.1.13"
+tracing-futures = "0.2.3"
+
+[dev-dependencies]
+tracing-subscriber = "*"
