@@ -1,38 +1,54 @@
-use std::net::{Ipv4Addr, SocketAddr};
+use std::fmt::Display;
+use std::net::SocketAddr;
 
-use drop::crypto::key::exchange::{Exchanger, PublicKey};
-use drop::net::{Connection, Listener, TcpConnector, TcpListener};
+use drop::crypto::key::exchange::Exchanger;
+use drop::net::DirectoryListener;
+use drop::net::{Listener, TcpConnector, TcpListener};
 
 use super::CoreNodeError;
 
 use std::time::Duration;
+use tokio::net::ToSocketAddrs;
 use tokio::sync::oneshot::{channel, Receiver, Sender};
 use tokio::time::timeout;
 
-use tracing::{debug, error, info, trace, trace_span, warn};
-use tracing_futures::Instrument;
+use tracing::{error, info};
 
 struct CoreNode {
-    listener: Box<dyn Listener<Candidate = SocketAddr>>,
+    dir_listener: DirectoryListener,
     exit: Receiver<()>,
 }
 
 impl CoreNode {
-    fn new<L: Listener<Candidate = SocketAddr> + 'static>(
-        listener: L,
-    ) -> (Self, Sender<()>) {
+    async fn new<A: ToSocketAddrs + Display>(
+        addr: SocketAddr,
+        dir_addr: A,
+    ) -> Result<(Self, Sender<()>), CoreNodeError> {
         let (tx, rx) = channel();
 
-        (
+        let exchanger = Exchanger::random();
+
+        let listener = TcpListener::new(addr, exchanger.clone())
+            .await
+            .expect("listen failed");
+
+        let connector = TcpConnector::new(exchanger);
+
+        let dir_listener =
+            DirectoryListener::new(listener, connector, dir_addr).await?;
+
+        let ret = (
             Self {
+                dir_listener: dir_listener,
                 exit: rx,
-                listener: Box::new(listener),
             },
             tx,
-        )
+        );
+
+        Ok(ret)
     }
 
-    pub async fn serve(mut self) -> Result<(), CoreNodeError> {
+    async fn serve(mut self) -> Result<(), CoreNodeError> {
         // handle this better, don't use an all encompassing error
         let to = Duration::from_secs(1);
 
@@ -42,15 +58,15 @@ impl CoreNode {
                 break;
             }
 
-            let mut connection = match timeout(to, self.listener.accept()).await
-            {
-                Ok(Ok(socket)) => socket,
-                Ok(Err(e)) => {
-                    error!("failed to accept directory connection: {}", e);
-                    return Err(e.into());
-                }
-                Err(_) => continue,
-            };
+            let mut connection =
+                match timeout(to, self.dir_listener.accept()).await {
+                    Ok(Ok(socket)) => socket,
+                    Ok(Err(e)) => {
+                        error!("failed to accept directory connection: {}", e);
+                        return Err(e.into());
+                    }
+                    Err(_) => continue,
+                };
 
             let peer_addr = connection.peer_addr()?;
 
@@ -71,22 +87,25 @@ mod test {
     use drop::net::connector::Connector;
 
     use drop::crypto::key::exchange::Exchanger;
-    use drop::net::{TcpConnector, TcpListener};
-
-    use futures::future;
+    use drop::net::{
+        Connection, DirectoryConnector, DirectoryInfo, DirectoryServer,
+        ListenerError, TcpConnector, TcpListener,
+    };
 
     use tokio::task::{self, JoinHandle};
+
+    use tracing::trace_span;
+    use tracing_futures::Instrument;
 
     use crate::test::*;
 
     async fn setup_node(
-        server: SocketAddr,
-        exchanger: Exchanger,
+        server_addr: SocketAddr,
+        dir_addr: SocketAddr,
     ) -> (Sender<()>, JoinHandle<()>) {
-        let listener = TcpListener::new(server, exchanger)
+        let (core_server, exit_tx) = CoreNode::new(server_addr, dir_addr)
             .await
-            .expect("listen failed");
-        let (core_server, exit_tx) = CoreNode::new(listener);
+            .expect("core node creation failed");
 
         let handle = task::spawn(
             async move { core_server.serve().await.expect("serve failed") }
@@ -96,36 +115,44 @@ mod test {
         (exit_tx, handle)
     }
 
-    fn new_peer() -> (PublicKey, SocketAddr) {
-        let peer = next_test_ip4();
-        let pkey = *Exchanger::random().keypair().public();
+    async fn setup_dir(
+        dir_addr: SocketAddr,
+    ) -> (
+        Sender<()>,
+        JoinHandle<Result<(), ListenerError>>,
+        DirectoryInfo,
+    ) {
+        let exchanger = Exchanger::random();
+        let dir_public = exchanger.keypair().public().clone();
+        let tcp = TcpListener::new(dir_addr, exchanger)
+            .await
+            .expect("bind failed");
+        let (dir, exit_dir) = DirectoryServer::new(tcp);
+        let handle_dir = tokio::task::spawn(async move { dir.serve().await });
 
-        (pkey, peer)
+        let dir_info = DirectoryInfo::from((dir_public, dir_addr));
+        (exit_dir, handle_dir, dir_info)
     }
 
-    async fn wait_for_server(exit_tx: Sender<()>, handle: JoinHandle<()>) {
+    async fn wait_for_server<T>(exit_tx: Sender<()>, handle: JoinHandle<T>) {
         exit_tx.send(()).expect("exit_failed");
         handle.await.expect("server failed");
     }
 
-    #[tokio::test]
-    async fn corenode_shutdown() {
-        init_logger();
+    async fn create_peer_and_connect(dir_info: &DirectoryInfo) -> Connection {
+        let exchanger = Exchanger::random();
+        let connector = TcpConnector::new(exchanger);
+        let mut dir_connector = DirectoryConnector::new(connector);
 
-        let (exit_tx, handle) =
-            setup_node(next_test_ip4(), Exchanger::random()).await;
+        let corenodes = dir_connector
+            .wait(1, dir_info)
+            .await
+            .expect("directory wait error");
 
-        wait_for_server(exit_tx, handle).await;
-    }
+        let remote_info = corenodes.get(0).unwrap();
 
-    async fn create_peer_and_connect(
-        server_pkey: &PublicKey,
-        server_addr: &SocketAddr,
-    ) -> Connection {
-        let connector = TcpConnector::new(Exchanger::random());
-
-        let mut connection = connector
-            .connect(&server_pkey, &server_addr)
+        let mut connection = dir_connector
+            .connect(remote_info.public(), dir_info)
             .instrument(trace_span!("adder"))
             .await
             .expect("connect failed");
@@ -149,49 +176,30 @@ mod test {
     }
 
     #[tokio::test]
+    async fn corenode_shutdown() {
+        init_logger();
+
+        let (exit_dir, handle_dir, dir_info) = setup_dir(next_test_ip4()).await;
+
+        let (exit_tx, handle) =
+            setup_node(next_test_ip4(), dir_info.addr()).await;
+
+        wait_for_server(exit_tx, handle).await;
+        wait_for_server(exit_dir, handle_dir).await;
+    }
+
+    #[tokio::test]
     async fn connect_to_corenode() {
         init_logger();
 
-        let corenode_address = next_test_ip4();
-        let exchanger = Exchanger::random();
-        let corenode_pkey = exchanger.keypair().public().clone();
-        let (exit_tx, corenode_handle) =
-            setup_node(corenode_address, exchanger).await;
+        let (exit_dir, handle_dir, dir_info) = setup_dir(next_test_ip4()).await;
 
-        create_peer_and_connect(&corenode_pkey, &corenode_address).await;
+        let (exit_tx, corenode_handle) =
+            setup_node(next_test_ip4(), dir_info.addr()).await;
+
+        create_peer_and_connect(&dir_info).await;
 
         wait_for_server(exit_tx, corenode_handle).await;
+        wait_for_server(exit_dir, handle_dir).await;
     }
-
-    // async fn add_peer(
-    //     server: SocketAddr,
-    //     addr: SocketAddr,
-    //     pkey: PublicKey,
-    //     connector: &dyn Connector<Candidate = SocketAddr>,
-    // ) -> Connection {
-    //     let peer = (pkey, addr).into();
-    //     let req = Request::Add(peer);
-
-    //     let mut connection = connector
-    //         .connect(&pkey, &server)
-    //         .instrument(trace_span!("adder"))
-    //         .await
-    //         .expect("connect failed");
-    //     let local = connection.local_addr().expect("getaddr failed");
-
-    //     async move {
-    //         connection.send_plain(&req).await.expect("send failed");
-
-    //         let resp = connection
-    //             .receive_plain::<Response>()
-    //             .await
-    //             .expect("recv failed");
-
-    //         assert_eq!(resp, Response::Ok, "invalid response");
-
-    //         connection
-    //     }
-    //     .instrument(trace_span!("adder", client = %local))
-    //     .await
-    // }
 }

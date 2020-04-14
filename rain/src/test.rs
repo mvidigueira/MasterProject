@@ -2,14 +2,8 @@ use std::env;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicU16, Ordering};
 
-use drop::crypto::key::exchange::{Exchanger, PublicKey};
-use drop::net::{Connection, Listener, TcpConnector, TcpListener};
+use drop::crypto::key::exchange::Exchanger;
 
-use futures::future;
-
-use tokio::task::{self, JoinHandle};
-
-use tracing::info;
 use tracing_subscriber::FmtSubscriber;
 
 static PORT_OFFSET: AtomicU16 = AtomicU16::new(0);
