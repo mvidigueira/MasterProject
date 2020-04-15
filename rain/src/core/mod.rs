@@ -1,4 +1,7 @@
-mod core;
+mod corenode;
+mod tob_server;
+
+pub use tob_server::TobServer;
 
 use std::io::Error as IoError;
 
@@ -18,3 +21,20 @@ error! {
     causes: (IoError, ListenerError, SendError),
     description: "server failure"
 }
+
+#[derive(
+    classic::Serialize,
+    classic::Deserialize,
+    Debug,
+    Copy,
+    Clone,
+    Hash,
+    PartialEq,
+    Eq,
+)]
+struct TxRequest;
+
+unsafe impl Send for TxRequest {}
+unsafe impl Sync for TxRequest {}
+
+impl classic::Message for TxRequest {}

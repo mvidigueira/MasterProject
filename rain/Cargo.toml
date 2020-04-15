@@ -10,7 +10,8 @@ edition = "2018"
 drop = { path = "/home/manuel/Documents/M4/rust_playground/drop" }
 macros = { path = "/home/manuel/Documents/M4/rust_playground/drop/macros" }
 merkle = { path = "../merkle" }
-# classic = { path = "/home/manuel/Documents/M4/rust_playground/classic" }
+classic = { path = "/home/manuel/Documents/M4/rust_playground/classic" }
+serde = "1.0.102"
 tokio = "0.2.0"
 futures = "0.3.4"
 tracing = "0.1.13"

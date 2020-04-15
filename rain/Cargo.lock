@@ -7,6 +7,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d2e7343e7fc9de883d1b0341e0b13970f764c14101234857d2ddafa1cb1cac2"
 
 [[package]]
+name = "ahash"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0989268a37e128d4d7a8028f1c60099430113fdbc70419010601ce51a228e4fe"
+dependencies = [
+ "const-random",
+]
+
+[[package]]
 name = "aho-corasick"
 version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -119,7 +128,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "818f21ae88324bc87cc4cffe89454c46c8a39f2499f5e4205bef6565f81ffd23"
 dependencies = [
  "ccl-crossbeam-epoch",
- "hashbrown",
+ "hashbrown 0.5.0",
  "num_cpus",
  "owning_ref",
  "parking_lot",
@@ -159,12 +168,46 @@ dependencies = [
 ]
 
 [[package]]
+name = "classic"
+version = "0.1.0"
+dependencies = [
+ "drop",
+ "error-chain",
+ "futures",
+ "hashbrown 0.7.1",
+ "serde",
+ "tokio",
+ "tracing",
+ "tracing-futures",
+]
+
+[[package]]
 name = "cloudabi"
 version = "0.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ddfc5b9aa5d4507acaf872de71051dfd0e309860e88966e1051e462a077aac4f"
 dependencies = [
  "bitflags",
+]
+
+[[package]]
+name = "const-random"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f1af9ac737b2dd2d577701e59fd09ba34822f6f2ebdb30a7647405d9e55e16a"
+dependencies = [
+ "const-random-macro",
+ "proc-macro-hack",
+]
+
+[[package]]
+name = "const-random-macro"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25e4c606eb459dd29f7c57b2e0879f2b6f14ee130918c2b78ccb58a9624e6c7a"
+dependencies = [
+ "getrandom",
+ "proc-macro-hack",
 ]
 
 [[package]]
@@ -202,6 +245,16 @@ dependencies = [
  "tokio-utp",
  "tracing",
  "tracing-futures",
+]
+
+[[package]]
+name = "error-chain"
+version = "0.12.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d371106cc88ffdfb1eabd7111e432da544f16f3e2d7bf1dfe8bf575f1df045cd"
+dependencies = [
+ "backtrace",
+ "version_check",
 ]
 
 [[package]]
@@ -351,6 +404,16 @@ name = "hashbrown"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e1de41fb8dba9714efd92241565cdff73f78508c95697dd56787d3cba27e2353"
+
+[[package]]
+name = "hashbrown"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "479e9d9a1a3f8c489868a935b557ab5710e3e223836da2ecd52901d88935cb56"
+dependencies = [
+ "ahash",
+ "autocfg",
+]
 
 [[package]]
 name = "hermit-abi"
@@ -742,10 +805,12 @@ dependencies = [
 name = "rain"
 version = "0.1.0"
 dependencies = [
+ "classic",
  "drop",
  "futures",
  "macros",
  "merkle",
+ "serde",
  "tokio",
  "tracing",
  "tracing-futures",
@@ -1234,6 +1299,12 @@ name = "vcpkg"
 version = "0.2.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3fc439f2794e98976c88a2a2dafce96b930fe8010b0a256b3c2199a773933168"
+
+[[package]]
+name = "version_check"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "078775d0255232fb988e6fccf26ddc9d1ac274299aaedcedce21c6f72cc533ce"
 
 [[package]]
 name = "wasi"
