@@ -2,9 +2,11 @@ use std::fmt::Display;
 use std::net::SocketAddr;
 
 use drop::crypto::key::exchange::{Exchanger, PublicKey};
-use drop::net::{DirectoryListener, Listener,
+use drop::net::{Connection, DirectoryListener, Listener,
     TcpConnector, TcpListener,
 };
+
+use super::TxRequest;
 
 use super::CoreNodeError;
 
@@ -13,7 +15,10 @@ use tokio::net::ToSocketAddrs;
 use tokio::sync::oneshot::{channel, Receiver, Sender};
 use tokio::time::timeout;
 
-use tracing::{error, info};
+use tracing::{error, info, trace_span};
+use tracing_futures::Instrument;
+
+use tokio::task;
 
 struct CoreNode {
     dir_listener: DirectoryListener,
@@ -79,14 +84,25 @@ impl CoreNode {
                     "new directory connection from TOB server: {}",
                     peer_addr
                 );
+
+                task::spawn(
+                    async move {
+                        let request_handler = TxRequestHandler::new(connection);
+
+                        if let Err(_) = request_handler.serve().await {
+                            error!("failed request handling");
+                        }
+
+                    }.instrument(trace_span!("tob_request_receiver", client = %self.tob_addr)),
+                );
+                
             } else {
                 info!("new directory connection from client {}", peer_addr);
+                connection
+                    .send(&String::from("Hello from corenode!"))
+                    .await?;
+                connection.close().await?;
             }
-
-            connection
-                .send(&String::from("Hello from corenode!"))
-                .await?;
-            connection.close().await?;
         }
 
         Ok(())
@@ -97,6 +113,27 @@ impl CoreNode {
     }
 }
 
+struct TxRequestHandler {
+    connection: Connection,
+}
+
+impl TxRequestHandler {
+    fn new(connection: Connection) -> Self {
+        Self {connection}
+    }
+
+    async fn serve(mut self) -> Result<(), CoreNodeError> {
+        loop {
+            let txr: TxRequest = self.connection.receive().await?; // todo: handle receive gracefully
+
+            info!("Received request {:?}", txr);
+
+            // TODO
+        }
+
+        //connection.close().await?;
+    }
+}
 
 #[cfg(test)]
 mod test {
@@ -144,6 +181,7 @@ mod test {
             }))
             .await;
 
+            // must setup tob AFTER corenodes (tob waits for corenodes to join directory)
             let (tob_exit, tob_handle, tob_info) =
                 setup_tob(tob_addr, &dir_info, nr_peer).await;
 

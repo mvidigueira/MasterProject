@@ -2,14 +2,14 @@ use std::net::SocketAddr;
 
 use drop::crypto::key::exchange::{Exchanger, PublicKey};
 use drop::net::{
-    DirectoryConnector, DirectoryInfo, Listener,
+    Connection, DirectoryConnector, DirectoryInfo, Listener,
     TcpConnector, TcpListener,
 };
 
 use super::TxRequest;
-use classic::{BestEffort, System};
+use classic::{BestEffort, System, Broadcast};
 
-use super::TobServerError;
+use super::{TobServerError, BroadcastError};
 
 use std::time::Duration;
 use tokio::sync::oneshot::{channel, Receiver, Sender};
@@ -80,7 +80,7 @@ impl TobServer {
                 break;
             }
 
-            let mut connection = match timeout(to, self.listener.accept()).await
+            let connection = match timeout(to, self.listener.accept()).await
             {
                 Ok(Ok(socket)) => socket,
                 Ok(Err(e)) => {
@@ -92,11 +92,23 @@ impl TobServer {
 
             let peer_addr = connection.peer_addr()?;
 
-            info!("new directory connection from client {}", peer_addr);
+            info!("new tob connection from client {}", peer_addr);
 
-            connection.send(&String::from("I am the mighty TOB server! I bestow ORDER upon the universe!")).await?;
-            connection.close().await?;
+            self.forward_request(connection).await?;
         }
+
+        Ok(())
+    }
+
+    async fn forward_request(&mut self, mut connection: Connection) -> Result<(), TobServerError> {
+        let txr: TxRequest = connection.receive().await.expect("recv failed"); // todo: handle receive gracefully
+    
+        if let Err(_) = self.beb.broadcast(&txr).await {
+            return Err(BroadcastError::new().into());
+        }
+
+        connection.send(&String::from("Request successfully forwarded to all peers")).await?;
+        connection.close().await?;
 
         Ok(())
     }

@@ -6,19 +6,24 @@ pub use tob_server::TobServer;
 use std::io::Error as IoError;
 
 use drop::error::Error;
-use drop::net::{ListenerError, SendError};
+use drop::net::{ListenerError, SendError, ReceiveError};
 
 use macros::error;
 
 error! {
     type: CoreNodeError,
-    causes: (IoError, ListenerError, SendError),
+    causes: (IoError, ListenerError, SendError, ReceiveError),
     description: "server failure"
 }
 
 error! {
+    type: BroadcastError,
+    description: "broadcast failure"
+}
+
+error! {
     type: TobServerError,
-    causes: (IoError, ListenerError, SendError),
+    causes: (IoError, ListenerError, SendError, BroadcastError),
     description: "server failure"
 }
 
@@ -26,13 +31,16 @@ error! {
     classic::Serialize,
     classic::Deserialize,
     Debug,
-    Copy,
     Clone,
     Hash,
     PartialEq,
     Eq,
 )]
-struct TxRequest;
+enum TxRequest {
+    GetProof(Vec<RecordID>),
+}
+
+type RecordID = String;
 
 unsafe impl Send for TxRequest {}
 unsafe impl Sync for TxRequest {}
