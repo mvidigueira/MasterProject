@@ -156,7 +156,7 @@ use serde::{Deserialize, Serialize, Deserializer};
 ///          k2   k3
 /// ```
 
-#[derive(Debug, Serialize, Default)]
+#[derive(Debug, Serialize, Default, Eq, PartialEq, Clone, Hash)]
 pub struct Tree<K, V>
 where
     K: Serialize + Clone + Eq,

@@ -39,7 +39,7 @@ impl Hashable for String {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone, Hash)]
 pub enum Node<K, V>
 where
     K: Serialize + Clone + Eq,
@@ -352,7 +352,7 @@ where
     }
 }
 
-#[derive(Serialize, Deserialize, Eq, PartialEq, Debug, Copy, Clone)]
+#[derive(Serialize, Deserialize, Eq, PartialEq, Debug, Copy, Clone, Hash)]
 pub struct Leaf<K, V>
 where
     K: Serialize + Eq,
@@ -442,7 +442,7 @@ where
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone, Hash)]
 struct DigestCache {
     digest: Digest,
     updated: bool,
@@ -469,7 +469,7 @@ impl DigestCache {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone, Hash)]
 pub struct Internal<K, V>
 where
     K: Serialize + Clone + Eq,
@@ -699,7 +699,7 @@ where
     }
 }
 
-#[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Copy)]
+#[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Copy, Hash)]
 pub struct Placeholder {
     d: Digest,
 }

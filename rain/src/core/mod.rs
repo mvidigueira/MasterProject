@@ -8,6 +8,8 @@ use std::io::Error as IoError;
 use drop::error::Error;
 use drop::net::{ListenerError, SendError, ReceiveError};
 
+use merkle::Tree;
+
 use macros::error;
 
 error! {
@@ -27,6 +29,9 @@ error! {
     description: "server failure"
 }
 
+type RecordID = String;
+type RecordVal = Vec<u8>;
+
 #[derive(
     classic::Serialize,
     classic::Deserialize,
@@ -38,11 +43,28 @@ error! {
 )]
 enum TxRequest {
     GetProof(Vec<RecordID>),
+    Execute(),
 }
 
-type RecordID = String;
+#[derive(
+    classic::Serialize,
+    classic::Deserialize,
+    Debug,
+    Clone,
+    Hash,
+    PartialEq,
+    Eq,
+)]
+enum TxResponse {
+    GetProof(Tree<RecordID, RecordVal>),
+    Execute(String),
+}
+
 
 unsafe impl Send for TxRequest {}
 unsafe impl Sync for TxRequest {}
-
 impl classic::Message for TxRequest {}
+
+unsafe impl Send for TxResponse {}
+unsafe impl Sync for TxResponse {}
+impl classic::Message for TxResponse {}

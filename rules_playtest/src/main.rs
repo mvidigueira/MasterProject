@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 #[wasmtime_rust::wasmtime]
 trait WasmContract {
-    fn transfer(&mut self, records: String, args: String) -> String;
+    fn execute(&mut self, records: String, args: String) -> String;
 }
 
 fn to_ledger(cl: HashMap<String, i32>) -> Ledger {
@@ -43,7 +43,7 @@ fn main() -> anyhow::Result<()> {
     c_ledger.insert("Bob".to_string(), 0);
     let ledger: Ledger = to_ledger(c_ledger);
     
-    let y = &contract.transfer(ledger.serialize_wasi(), args);
+    let y = &contract.execute(ledger.serialize_wasi(), args);
     match extract_result(y) {
         Err(s) => println!("Error: {}", s),
         Ok(l) => println!("{:#?}", to_context_ledger(l))

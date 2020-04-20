@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use drop::crypto::key::exchange::{Exchanger, PublicKey};
 use drop::net::{
@@ -14,12 +15,17 @@ use super::{TobServerError, BroadcastError};
 use std::time::Duration;
 use tokio::sync::oneshot::{channel, Receiver, Sender};
 use tokio::time::timeout;
+use tokio::sync::RwLock;
+use tokio::task;
 
-use tracing::{error, info};
+use tracing::{error, info, trace_span};
+use tracing_futures::Instrument;
+
+type ProtectedBeb = Arc<RwLock<BestEffort<TxRequest>>>;
 
 pub struct TobServer {
     listener: Box<dyn Listener<Candidate = SocketAddr>>,
-    beb: BestEffort<TxRequest>,
+    beb: ProtectedBeb,
     exit: Receiver<()>,
 }
 
@@ -51,6 +57,7 @@ impl TobServer {
         drop(dir_connector);
 
         let connector = TcpConnector::new(exchanger);
+
         let beb = System::new_with_connector_zipped(
             &connector,
             peers.drain(..).map(|info| (*info.public(), info.addr())),
@@ -61,7 +68,7 @@ impl TobServer {
         let ret = (
             Self {
                 listener: Box::new(listener),
-                beb: beb,
+                beb: Arc::from(RwLock::new(beb)),
                 exit: rx,
             },
             tx,
@@ -94,26 +101,66 @@ impl TobServer {
 
             info!("new tob connection from client {}", peer_addr);
 
-            self.forward_request(connection).await?;
+            let beb = self.beb.clone();
+
+            task::spawn(
+                async move {
+                    let request_handler = TobRequestHandler::new(connection, beb);
+
+                    if let Err(_) = request_handler.serve().await {
+                        error!("failed request handling");
+                    }
+
+                }.instrument(trace_span!("tob_request_receiver", client = %peer_addr)),
+            );
         }
-
-        Ok(())
-    }
-
-    async fn forward_request(&mut self, mut connection: Connection) -> Result<(), TobServerError> {
-        let txr: TxRequest = connection.receive().await.expect("recv failed"); // todo: handle receive gracefully
-    
-        if let Err(_) = self.beb.broadcast(&txr).await {
-            return Err(BroadcastError::new().into());
-        }
-
-        connection.send(&String::from("Request successfully forwarded to all peers")).await?;
-        connection.close().await?;
 
         Ok(())
     }
 
     pub fn public_key(&self) -> &PublicKey {
         self.listener.exchanger().keypair().public()
+    }
+}
+
+
+struct TobRequestHandler {
+    connection: Connection,
+    beb: ProtectedBeb,
+}
+
+impl TobRequestHandler {
+    fn new(connection: Connection, beb: ProtectedBeb) -> Self {
+        Self {connection, beb}
+    }
+
+    async fn handle_broadcast(&mut self, txr: TxRequest) -> Result<(), TobServerError> {
+        if let Err(_) = self.beb.write().await.broadcast(&txr).await {
+            return Err(BroadcastError::new().into());
+        }
+
+        Ok(())
+    }
+
+    async fn serve(mut self) -> Result<(), TobServerError> {
+
+        while let Ok(txr) = self.connection.receive::<TxRequest>().await {
+            info!("Received request {:?}", txr);
+
+            match txr {
+                TxRequest::GetProof(_) => {
+                    error!("TxRequest::GetProof should be sent directly by a client, not via TOB!");
+                }
+                TxRequest::Execute() => {
+                    self.handle_broadcast(TxRequest::Execute()).await?;
+                }
+            }
+        }
+
+        self.connection.close().await?;
+
+        info!("end of TOB connection");
+
+        Ok(())
     }
 }

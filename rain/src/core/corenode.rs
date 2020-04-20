@@ -1,12 +1,14 @@
 use std::fmt::Display;
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use drop::crypto::key::exchange::{Exchanger, PublicKey};
 use drop::net::{Connection, DirectoryListener, Listener,
     TcpConnector, TcpListener,
 };
 
-use super::TxRequest;
+use super::{TxRequest, TxResponse, RecordID, RecordVal};
+use merkle::Tree;
 
 use super::CoreNodeError;
 
@@ -14,16 +16,26 @@ use std::time::Duration;
 use tokio::net::ToSocketAddrs;
 use tokio::sync::oneshot::{channel, Receiver, Sender};
 use tokio::time::timeout;
+use tokio::task;
+use tokio::sync::RwLock;
 
 use tracing::{error, info, trace_span};
 use tracing_futures::Instrument;
 
-use tokio::task;
+use drop::crypto::sign::Signer;
+
+type DataTree = Tree<RecordID, RecordVal>;
+type ProtectedTree = Arc<RwLock<DataTree>>;
+
 
 struct CoreNode {
     dir_listener: DirectoryListener,
     tob_addr: SocketAddr,
     exit: Receiver<()>,
+
+    data: ProtectedTree,
+
+    // signer: Signer,
 }
 
 impl CoreNode {
@@ -50,6 +62,8 @@ impl CoreNode {
                 dir_listener: dir_listener,
                 tob_addr: tob_addr,
                 exit: rx,
+                
+                data: Arc::from(RwLock::new(DataTree::new())),
             },
             tx,
         );
@@ -78,31 +92,26 @@ impl CoreNode {
                 };
 
             let peer_addr = connection.peer_addr()?;
+            
+            let data = self.data.clone();
 
             if peer_addr == self.tob_addr {
-                info!(
-                    "new directory connection from TOB server: {}",
-                    peer_addr
-                );
-
-                task::spawn(
-                    async move {
-                        let request_handler = TxRequestHandler::new(connection);
-
-                        if let Err(_) = request_handler.serve().await {
-                            error!("failed request handling");
-                        }
-
-                    }.instrument(trace_span!("tob_request_receiver", client = %self.tob_addr)),
-                );
-                
+                info!("new directory connection from TOB server: {}", peer_addr);                
             } else {
                 info!("new directory connection from client {}", peer_addr);
-                connection
-                    .send(&String::from("Hello from corenode!"))
-                    .await?;
-                connection.close().await?;
             }
+
+            let from_client = peer_addr != self.tob_addr;
+            task::spawn(
+                async move {
+                    let request_handler = TxRequestHandler::new(connection, data, from_client);
+
+                    if let Err(_) = request_handler.serve().await {
+                        error!("failed request handling");
+                    }
+
+                }.instrument(trace_span!("tob_request_receiver", client = %self.tob_addr)),
+            );
         }
 
         Ok(())
@@ -115,23 +124,68 @@ impl CoreNode {
 
 struct TxRequestHandler {
     connection: Connection,
+    data: ProtectedTree,
+    from_client: bool,
 }
 
 impl TxRequestHandler {
-    fn new(connection: Connection) -> Self {
-        Self {connection}
+    fn new(connection: Connection, data: ProtectedTree, from_client: bool) -> Self {
+        Self {connection, data, from_client}
+    }
+
+    async fn handle_get_proof(&mut self, records: Vec<RecordID>) -> Result<(), CoreNodeError> {
+        let guard = self.data.read().await;
+
+        let mut t = guard.get_validator();
+        for r in records {
+            match guard.get_proof(&r) {
+                Ok(proof) => {
+                    t.merge(&proof).unwrap();
+                }
+                Err(_) => (),
+            }
+        }
+
+        drop(guard);
+
+        self.connection.send(&TxResponse::GetProof(t)).await?;
+
+        Ok(())
+    }
+
+    async fn handle_execute(&mut self) -> Result<(), CoreNodeError> {
+        info!("Execute success!");
+
+        Ok(())
     }
 
     async fn serve(mut self) -> Result<(), CoreNodeError> {
-        loop {
-            let txr: TxRequest = self.connection.receive().await?; // todo: handle receive gracefully
-
+        while let Ok(txr) = self.connection.receive::<TxRequest>().await {
             info!("Received request {:?}", txr);
 
-            // TODO
+            match txr {
+                TxRequest::GetProof(records) => {
+                    if self.from_client {
+                        self.handle_get_proof(records).await?;
+                    } else {
+                        error!("TxRequest::GetProof should be sent directly by a client, not via TOB!");
+                    }
+                }
+                TxRequest::Execute() => {
+                    if self.from_client {
+                        error!("Client attempting to execute directly. TxExecute can only come from TOB!");
+                    } else {
+                        self.handle_execute().await?;
+                    }
+                }
+            }
         }
 
-        //connection.close().await?;
+        self.connection.close().await?;
+
+        info!("end of TOB connection");
+
+        Ok(())
     }
 }
 
@@ -342,18 +396,21 @@ mod test {
 
         let local = connection.local_addr().expect("getaddr failed");
 
-        async move {
-            let resp =
-                connection.receive::<String>().await.expect("recv failed");
+        // async move {
+        //     let txr = TxRequest::Execute();
+        //     connection.send(&txr).await.expect("send failed");
 
-            assert_eq!(
-                resp,
-                String::from("I am the mighty TOB server! I bestow ORDER upon the universe!"),
-                "invalid response from tob server"
-            );
-        }
-        .instrument(trace_span!("adder", client = %local))
-        .await;
+        //     let resp =
+        //         connection.receive::<String>().await.expect("recv failed");
+
+        //     assert_eq!(
+        //         resp,
+        //         String::from("Request successfully forwarded to all peers"),
+        //         "invalid response from tob server"
+        //     );
+        // }
+        // .instrument(trace_span!("adder", client = %local))
+        // .await;
 
         config.tear_down().await;
     }
@@ -370,12 +427,15 @@ mod test {
         let local = connection.local_addr().expect("getaddr failed");
 
         async move {
+            let txr = TxRequest::GetProof(vec!(String::from("Alan")));
+            connection.send(&txr).await.expect("send failed");
+
             let resp =
-                connection.receive::<String>().await.expect("recv failed");
+                connection.receive::<TxResponse>().await.expect("recv failed");
 
             assert_eq!(
                 resp,
-                String::from("Hello from corenode!"),
+                TxResponse::GetProof(DataTree::new().get_validator()),
                 "invalid response from corenode"
             );
         }
