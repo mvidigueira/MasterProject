@@ -136,8 +136,11 @@ impl TobRequestHandler {
 
     async fn handle_broadcast(&mut self, txr: TxRequest) -> Result<(), TobServerError> {
         if let Err(_) = self.beb.write().await.broadcast(&txr).await {
+            let _ = self.connection.send(&String::from("Error forwarding to peers")).await;
             return Err(BroadcastError::new().into());
         }
+
+        let _ = self.connection.send(&String::from("Request successfully forwarded to all peers")).await;
 
         Ok(())
     }

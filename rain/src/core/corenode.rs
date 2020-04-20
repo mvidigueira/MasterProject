@@ -390,27 +390,27 @@ mod test {
     async fn connect_to_tob() {
         init_logger();
 
-        let config = SetupConfig::setup(0).await;
+        let config = SetupConfig::setup(1).await;
 
         let mut connection = create_peer_and_connect(&config.tob_info).await;
 
         let local = connection.local_addr().expect("getaddr failed");
 
-        // async move {
-        //     let txr = TxRequest::Execute();
-        //     connection.send(&txr).await.expect("send failed");
+        async move {
+            let txr = TxRequest::Execute();
+            connection.send(&txr).await.expect("send failed");
 
-        //     let resp =
-        //         connection.receive::<String>().await.expect("recv failed");
+            let resp =
+                connection.receive::<String>().await.expect("recv failed");
 
-        //     assert_eq!(
-        //         resp,
-        //         String::from("Request successfully forwarded to all peers"),
-        //         "invalid response from tob server"
-        //     );
-        // }
-        // .instrument(trace_span!("adder", client = %local))
-        // .await;
+            assert_eq!(
+                resp,
+                String::from("Request successfully forwarded to all peers"),
+                "invalid response from tob server"
+            );
+        }
+        .instrument(trace_span!("adder", client = %local))
+        .await;
 
         config.tear_down().await;
     }
@@ -444,4 +444,37 @@ mod test {
 
         config.tear_down().await;
     }
+
+    // #[tokio::test]
+    // async fn request_add() {
+    //     init_logger();
+
+    //     let config = SetupConfig::setup(1).await;
+
+    //     let mut c_ask =
+    //         create_peer_and_connect(&config.corenodes[0].2).await;
+    //     let mut c_exec = 
+
+    //     let local = c_ask.local_addr().expect("getaddr failed");
+
+    //     async move {
+    //         let txr = TxRequest::GetProof(vec!(String::from("Alan")));
+    //             c_ask.send(&txr).await.expect("send failed");
+
+    //         let resp =
+    //             c_ask.receive::<TxResponse>().await.expect("recv failed");
+
+    //         assert_eq!(
+    //             resp,
+    //             TxResponse::GetProof(DataTree::new().get_validator()),
+    //             "invalid response from corenode"
+    //         );
+
+    //         c_ask.close().await
+    //     }
+    //     .instrument(trace_span!("adder", client = %local))
+    //     .await;
+
+    //     config.tear_down().await;
+    // }
 }
