@@ -7,7 +7,7 @@ use drop::net::{
     Connection, DirectoryListener, Listener, TcpConnector, TcpListener,
 };
 
-use super::{RecordID, TxRequest, TxResponse, DataTree};
+use super::{DataTree, RecordID, TxRequest, TxResponse};
 
 use super::CoreNodeError;
 
@@ -200,7 +200,7 @@ impl TxRequestHandler {
 #[cfg(test)]
 mod test {
     use super::super::test::*;
-    use super::super::{TxRequest, TxResponse, DataTree};
+    use super::super::{DataTree, TxRequest, TxResponse};
 
     use tracing::trace_span;
     use tracing_futures::Instrument;
@@ -213,8 +213,13 @@ mod test {
 
         let fake_tob_addr = next_test_ip4();
 
-        let (exit_tx, handle, _) =
-            setup_corenode(next_test_ip4(), dir_info.addr(), fake_tob_addr, DataTree::new()).await;
+        let (exit_tx, handle, _) = setup_corenode(
+            next_test_ip4(),
+            dir_info.addr(),
+            fake_tob_addr,
+            DataTree::new(),
+        )
+        .await;
 
         wait_for_server(exit_tx, handle).await;
         wait_for_server(exit_dir, handle_dir).await;

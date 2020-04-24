@@ -184,7 +184,7 @@ impl TobRequestHandler {
 #[cfg(test)]
 mod test {
     use super::super::test::*;
-    use super::super::{TxRequest, TxResponse, DataTree};
+    use super::super::{DataTree, TxRequest, TxResponse};
 
     use tracing::trace_span;
     use tracing_futures::Instrument;
@@ -194,7 +194,8 @@ mod test {
         init_logger();
 
         let (exit_dir, handle_dir, dir_info) = setup_dir(next_test_ip4()).await;
-        let (exit_tob, handle_tob, _) = setup_tob(next_test_ip4(), &dir_info, 0).await;
+        let (exit_tob, handle_tob, _) =
+            setup_tob(next_test_ip4(), &dir_info, 0).await;
 
         wait_for_server(exit_tob, handle_tob).await;
         wait_for_server(exit_dir, handle_dir).await;

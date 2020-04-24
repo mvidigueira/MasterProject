@@ -5,17 +5,19 @@ mod tob_server;
 #[cfg(test)]
 pub mod test;
 
-pub use tob_server::TobServer;
-pub use corenode::CoreNode;
 pub use client::ClientNode;
+pub use corenode::CoreNode;
+pub use tob_server::TobServer;
 
 use std::io::Error as IoError;
 
 use drop::crypto::{self, Digest};
 use drop::error::Error;
-use drop::net::{DirectoryInfo, ListenerError, ReceiveError, SendError, ConnectError};
+use drop::net::{
+    ConnectError, DirectoryInfo, ListenerError, ReceiveError, SendError,
+};
 
-use merkle::{Tree, error::MerkleError};
+use merkle::{error::MerkleError, Tree};
 
 use macros::error;
 

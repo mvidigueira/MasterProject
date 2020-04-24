@@ -2,15 +2,16 @@ use std::env;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicU16, Ordering};
 
-use super::{CoreNode, TobServer, DataTree};
+use super::{CoreNode, DataTree, TobServer};
 
 use drop::crypto::key::exchange::Exchanger;
 use drop::net::{
-    Connector, Connection, DirectoryInfo, DirectoryServer, TcpConnector, TcpListener,
+    Connection, Connector, DirectoryInfo, DirectoryServer, TcpConnector,
+    TcpListener,
 };
 
+use tokio::sync::oneshot::Sender;
 use tokio::task::{self, JoinHandle};
-use tokio::sync::oneshot::{Sender};
 
 use tracing::trace_span;
 use tracing_futures::Instrument;
@@ -19,7 +20,6 @@ use tracing_subscriber::FmtSubscriber;
 use futures::future;
 
 static PORT_OFFSET: AtomicU16 = AtomicU16::new(0);
-
 
 /// Initialize an asynchronous logger for test environment
 pub fn init_logger() {
@@ -57,13 +57,17 @@ impl SetupConfig {
             panic!("SetupConfig must be setup with at least 1 core node");
         }
 
-        let (dir_exit, dir_handle, dir_info) =
-            setup_dir(next_test_ip4()).await;
+        let (dir_exit, dir_handle, dir_info) = setup_dir(next_test_ip4()).await;
 
         let tob_addr = next_test_ip4();
 
         let corenodes = future::join_all((0..nr_peer).map(|_| {
-            setup_corenode(next_test_ip4(), dir_info.addr(), tob_addr, dt.clone())
+            setup_corenode(
+                next_test_ip4(),
+                dir_info.addr(),
+                tob_addr,
+                dt.clone(),
+            )
         }))
         .await;
 
@@ -140,7 +144,7 @@ pub async fn setup_tob(
     tob_addr: SocketAddr,
     dir_info: &DirectoryInfo,
     nr_peer: usize,
-) -> (Sender<()>, JoinHandle<()>, DirectoryInfo) {    
+) -> (Sender<()>, JoinHandle<()>, DirectoryInfo) {
     let (tob_server, exit_tx) = TobServer::new(tob_addr, dir_info, nr_peer)
         .await
         .expect("tob server creation failed");
