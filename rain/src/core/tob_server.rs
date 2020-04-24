@@ -3,20 +3,20 @@ use std::sync::Arc;
 
 use drop::crypto::key::exchange::{Exchanger, PublicKey};
 use drop::net::{
-    Connection, DirectoryConnector, DirectoryInfo, Listener,
-    TcpConnector, TcpListener,
+    Connection, DirectoryConnector, DirectoryInfo, Listener, TcpConnector,
+    TcpListener,
 };
 
-use super::TxRequest;
-use classic::{BestEffort, System, Broadcast};
+use super::{TxRequest, TxResponse};
+use classic::{BestEffort, Broadcast, System};
 
-use super::{TobServerError, BroadcastError};
+use super::{BroadcastError, TobServerError};
 
 use std::time::Duration;
 use tokio::sync::oneshot::{channel, Receiver, Sender};
-use tokio::time::timeout;
 use tokio::sync::RwLock;
 use tokio::task;
+use tokio::time::timeout;
 
 use tracing::{error, info, trace_span};
 use tracing_futures::Instrument;
@@ -87,8 +87,7 @@ impl TobServer {
                 break;
             }
 
-            let connection = match timeout(to, self.listener.accept()).await
-            {
+            let connection = match timeout(to, self.listener.accept()).await {
                 Ok(Ok(socket)) => socket,
                 Ok(Err(e)) => {
                     error!("failed to accept client connection: {}", e);
@@ -105,13 +104,16 @@ impl TobServer {
 
             task::spawn(
                 async move {
-                    let request_handler = TobRequestHandler::new(connection, beb);
+                    let request_handler =
+                        TobRequestHandler::new(connection, beb);
 
                     if let Err(_) = request_handler.serve().await {
                         error!("failed request handling");
                     }
-
-                }.instrument(trace_span!("tob_request_receiver", client = %peer_addr)),
+                }
+                .instrument(
+                    trace_span!("tob_request_receiver", client = %peer_addr),
+                ),
             );
         }
 
@@ -123,7 +125,6 @@ impl TobServer {
     }
 }
 
-
 struct TobRequestHandler {
     connection: Connection,
     beb: ProtectedBeb,
@@ -131,22 +132,34 @@ struct TobRequestHandler {
 
 impl TobRequestHandler {
     fn new(connection: Connection, beb: ProtectedBeb) -> Self {
-        Self {connection, beb}
+        Self { connection, beb }
     }
 
-    async fn handle_broadcast(&mut self, txr: TxRequest) -> Result<(), TobServerError> {
+    async fn handle_broadcast(
+        &mut self,
+        txr: TxRequest,
+    ) -> Result<(), TobServerError> {
         if let Err(_) = self.beb.write().await.broadcast(&txr).await {
-            let _ = self.connection.send(&String::from("Error forwarding to peers")).await;
+            let _ = self
+                .connection
+                .send(&TxResponse::Execute(String::from(
+                    "Error forwarding to peers",
+                )))
+                .await;
             return Err(BroadcastError::new().into());
         }
 
-        let _ = self.connection.send(&String::from("Request successfully forwarded to all peers")).await;
+        let _ = self
+            .connection
+            .send(&TxResponse::Execute(String::from(
+                "Request successfully forwarded to all peers",
+            )))
+            .await;
 
         Ok(())
     }
 
     async fn serve(mut self) -> Result<(), TobServerError> {
-
         while let Ok(txr) = self.connection.receive::<TxRequest>().await {
             info!("Received request {:?}", txr);
 
@@ -165,5 +178,58 @@ impl TobRequestHandler {
         info!("end of TOB connection");
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::super::test::*;
+    use super::super::{TxRequest, TxResponse, DataTree};
+
+    use tracing::trace_span;
+    use tracing_futures::Instrument;
+
+    #[tokio::test]
+    async fn tob_shutdown() {
+        init_logger();
+
+        let (exit_dir, handle_dir, dir_info) = setup_dir(next_test_ip4()).await;
+        let (exit_tob, handle_tob, _) = setup_tob(next_test_ip4(), &dir_info, 0).await;
+
+        wait_for_server(exit_tob, handle_tob).await;
+        wait_for_server(exit_dir, handle_dir).await;
+    }
+
+    #[tokio::test]
+    async fn tob_forwarding() {
+        init_logger();
+
+        let config = SetupConfig::setup(1, DataTree::new()).await;
+
+        let mut connection = create_peer_and_connect(&config.tob_info).await;
+
+        let local = connection.local_addr().expect("getaddr failed");
+
+        async move {
+            let txr = TxRequest::Execute();
+            connection.send(&txr).await.expect("send failed");
+
+            let resp = connection
+                .receive::<TxResponse>()
+                .await
+                .expect("recv failed");
+
+            assert_eq!(
+                resp,
+                TxResponse::Execute(String::from(
+                    "Request successfully forwarded to all peers"
+                )),
+                "invalid response from tob server"
+            );
+        }
+        .instrument(trace_span!("adder", client = %local))
+        .await;
+
+        config.tear_down().await;
     }
 }

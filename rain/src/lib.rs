@@ -1,4 +1,1 @@
-#[cfg(test)]
-pub mod test;
-
-mod core;
+pub mod core;
