@@ -290,7 +290,7 @@ where
             (Node::Leaf(_), Node::Placeholder(_)) => (), // assuming the hashes are equal (unchecked)
             (Node::Leaf(_), Node::Leaf(_)) => (), // assuming the leaves are equal (unchecked)
             (Node::Placeholder(_), _) => {
-                panic!("This code should never be reached");
+                unreachable!();
             }
         }
     }
@@ -304,7 +304,25 @@ where
             Node::Internal(i) => i.update_cache_recursive(),
             Node::Placeholder(_) => (),
             Node::Leaf(_) => (),
-        } 
+        }
+    }
+
+    /// Recursively clones and inserts all key-value pairs into the provided vector
+    pub fn collect(&self, vec: &mut Vec<(K, V)>) {
+        match self {
+            Node::Internal(i) => i.collect(vec),
+            Node::Placeholder(_) => (),
+            Node::Leaf(l) => l.collect(vec),
+        }
+    }
+
+    // Recursively counts the number of leaves
+    pub fn count(&self) -> usize {
+        match self {
+            Node::Internal(i) => i.count(),
+            Node::Placeholder(_) => 0,
+            Node::Leaf(_) => 1,
+        }
     }
 }
 
@@ -439,6 +457,10 @@ where
         } else {
             (None, Some(self)) // consider refactoring (return an error)
         }
+    }
+
+    pub fn collect(&self, vec: &mut Vec<(K, V)>) {
+        vec.push((self.key().clone(), self.value().clone()));
     }
 }
 
@@ -696,6 +718,31 @@ where
                 panic!("The trees should be compatible but are not");
             }
         }
+    }
+
+    pub fn collect(&self, vec: &mut Vec<(K, V)>) {
+        match &self.left {
+            None => (),
+            Some(n) => n.collect(vec),
+        }
+        match &self.right {
+            None => (),
+            Some(n) => n.collect(vec),
+        }
+    }
+
+    pub fn count(&self) -> usize {
+        let l_count = match &self.left {
+            None => 0,
+            Some(n) => n.count(),
+        };
+
+        let r_count = match &self.right {
+            None => 0,
+            Some(n) => n.count(),
+        };
+
+        l_count + r_count
     }
 }
 

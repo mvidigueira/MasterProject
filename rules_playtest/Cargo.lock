@@ -198,16 +198,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "common"
-version = "0.1.0"
-dependencies = [
- "base64",
- "bincode",
- "serde",
- "wasm-bindgen",
-]
-
-[[package]]
 name = "constant_time_eq"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -893,8 +883,7 @@ dependencies = [
  "anyhow",
  "base64",
  "bincode",
- "common",
- "wasmtime-rust",
+ "wasm_contracts_common",
 ]
 
 [[package]]
@@ -1275,6 +1264,17 @@ dependencies = [
  "id-arena",
  "leb128",
  "walrus",
+]
+
+[[package]]
+name = "wasm_contracts_common"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "bincode",
+ "serde",
+ "wasm-bindgen",
+ "wasmtime-rust",
 ]
 
 [[package]]

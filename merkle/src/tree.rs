@@ -524,6 +524,59 @@ where
 
         Ok(())
     }
+
+    /// Copies the tree's key-value pairs, pushing them into the provided vector.
+    /// 
+    /// The key-value pairs are inserted by increasing order of the hashes of the keys, as per [`hash`].
+    ///
+    /// [`Vec`]: https://doc.rust-lang.org/std/vec/struct.Vec.html
+    /// [`hash`]: ../drop/crypto/hash/fn.hash.html
+    /// 
+    /// # Examples
+    ///
+    /// ```
+    /// extern crate merkle;
+    /// use merkle::Tree;
+    ///
+    /// let mut tree = Tree::new();
+    /// tree.insert(1, "a");
+    /// tree.insert(2, "b");
+    /// 
+    /// let v = tree.clone_to_vec();
+    /// 
+    /// assert!(v.contains(&(1, "a")));
+    /// assert!(v.contains(&(2, "b")));
+    /// ```
+    pub fn clone_to_vec(&self) -> Vec<(K, V)> {
+        let mut vec = Vec::new();
+        match &self.root {
+            None => (),
+            Some(n) => n.collect(&mut vec),
+        }
+        vec
+    }
+
+
+    /// Returns the number of elements in the tree, also referred to as its 'length'.
+    /// 
+    /// # Examples
+    ///
+    /// ```
+    /// extern crate merkle;
+    /// use merkle::Tree;
+    ///
+    /// let mut tree = Tree::new();
+    /// tree.insert(1, "a");
+    /// tree.insert(2, "b");
+    /// 
+    /// assert_eq!(tree.len(), 2);
+    /// ```
+    pub fn len(&self) -> usize {
+        match &self.root {
+            None => 0,
+            Some(n) => n.count(),
+        }
+    }
 }
 
 /// A merkle proof. Used in the context of a *validating* tree (usually incomplete).
@@ -663,8 +716,6 @@ mod tests {
 
         let ser = bincode::serialize(&proof).unwrap();
         let proof: Proof<_,_> = bincode::deserialize(&ser).unwrap();
-        
-        //proof.root.as_mut().unwrap().update_cache_recursive();
 
         assert!(tree.validate(&proof));
     }

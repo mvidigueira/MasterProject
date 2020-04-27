@@ -20,6 +20,7 @@ use drop::net::{
 use merkle::{error::MerkleError, Tree};
 
 use macros::error;
+extern crate bincode;
 
 error! {
     type: ReplyError,
@@ -58,7 +59,7 @@ type DataTree = Tree<RecordID, RecordVal>;
 )]
 enum TxRequest {
     GetProof(Vec<RecordID>),
-    Execute(),
+    Execute(RuleTransaction),
 }
 
 #[derive(
@@ -94,6 +95,29 @@ fn closest<'a>(
             } else {
                 &sorted_corenodes[i].1
             }
+        }
+    }
+}
+
+#[derive(
+    classic::Serialize, classic::Deserialize, Debug, Clone, Hash, PartialEq, Eq,
+)]
+pub struct RuleTransaction {
+    merkle_proof: DataTree,
+    rule_record_id: RecordID,
+    rule_arguments: Vec<u8>,
+}
+
+impl RuleTransaction {
+    pub fn new<T: classic::Serialize>(
+        proof: DataTree,
+        rule: RecordID,
+        args: &T,
+    ) -> Self {
+        Self {
+            merkle_proof: proof,
+            rule_record_id: rule,
+            rule_arguments: bincode::serialize(args).unwrap(),
         }
     }
 }

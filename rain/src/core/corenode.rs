@@ -7,7 +7,8 @@ use drop::net::{
     Connection, DirectoryListener, Listener, TcpConnector, TcpListener,
 };
 
-use super::{DataTree, RecordID, TxRequest, TxResponse};
+use super::{DataTree, RecordID, RuleTransaction, TxRequest, TxResponse};
+use merkle::error::MerkleError;
 
 use super::CoreNodeError;
 
@@ -20,6 +21,10 @@ use tokio::time::timeout;
 
 use tracing::{error, info, trace_span};
 use tracing_futures::Instrument;
+
+use wasm_contracts_common::{Ledger, WasiSerializable, WasmContract};
+
+const RECORD_LIMIT: usize = 400;
 
 type ProtectedTree = Arc<RwLock<DataTree>>;
 
@@ -161,8 +166,90 @@ impl TxRequestHandler {
         Ok(())
     }
 
-    async fn handle_execute(&mut self) -> Result<(), CoreNodeError> {
-        info!("Execute success!");
+    async fn handle_execute(
+        &mut self,
+        rt: RuleTransaction,
+    ) -> Result<(), CoreNodeError> {
+        let used_record_count = rt.merkle_proof.len();
+        if used_record_count > RECORD_LIMIT {
+            info!("Error processing transaction: record limit exceeded. Limit is {}, rule touches {}", RECORD_LIMIT, used_record_count);
+            return Ok(());
+        }
+
+        let mut guard = self.data.write().await;
+
+        let t = guard.get_validator();
+        if !t.validate(&rt.merkle_proof) {
+            info!("Error processing transaction: invalid merkle proof");
+            return Ok(());
+        }
+
+        match rt.merkle_proof.get(&rt.rule_record_id) {
+            Err(_) => {
+                info!("Error processing transaction: rule is missing from merkle proof");
+                return Ok(());
+            }
+            Ok(bytes) => {
+                let mut contract = match WasmContract::load_bytes(bytes) {
+                    Err(_) => {
+                        info!("Error processing transaction: error loading wasi contract");
+                        return Ok(());
+                    }
+                    Ok(c) => c,
+                };
+
+                let args = wasm_contracts_common::serialize_args_from_byte_vec(
+                    &rt.rule_arguments,
+                );
+
+                let input_ledger: Ledger =
+                    rt.merkle_proof.clone_to_vec().into_iter().collect();
+
+                let result =
+                    &contract.execute(input_ledger.serialize_wasi(), args);
+
+                let mut output_ledger = match wasm_contracts_common::extract_result(
+                    result,
+                ) {
+                    Err(e) => {
+                        info!("Error processing transaction: contract output an error: {}", e);
+                        return Ok(());
+                    }
+                    Ok(l) => l,
+                };
+
+                let mut new_record_count = 0;
+                for key in output_ledger.keys() {
+                    if !input_ledger.contains_key(key) {
+                        new_record_count += 1;
+                        match rt.merkle_proof.get(key) {
+                            Err(MerkleError::KeyNonExistant) => (),
+                            Err(MerkleError::KeyBehindPlaceholder) => {
+                                info!("Error processing transaction: contract adds or modifies a record outside merkle proof");
+                                return Ok(());
+                            }
+                            Err(MerkleError::IncompatibleTrees) => {
+                                unreachable!()
+                            }
+                            Ok(_) => unreachable!(),
+                        }
+
+                        if used_record_count + new_record_count > RECORD_LIMIT {
+                            info!("Error processing transaction: record limit exceeded. Limit is {}, rule touches {}", RECORD_LIMIT, used_record_count);
+                            return Ok(());
+                        }
+                    }
+                }
+
+                for (k,v) in output_ledger.drain() {
+                    guard.insert(k, v);
+                }
+
+                info!("Transaction applied: local data successfully updated.");
+            }
+        }
+
+        drop(guard);
 
         Ok(())
     }
@@ -179,11 +266,11 @@ impl TxRequestHandler {
                         error!("TxRequest::GetProof should be sent directly by a client, not via TOB!");
                     }
                 }
-                TxRequest::Execute() => {
+                TxRequest::Execute(rt) => {
                     if self.from_client {
                         error!("Client attempting to execute directly. TxExecute can only come from TOB!");
                     } else {
-                        self.handle_execute().await?;
+                        self.handle_execute(rt).await?;
                     }
                 }
             }
@@ -251,7 +338,7 @@ mod test {
                 "invalid response from corenode"
             );
         }
-        .instrument(trace_span!("adder", client = %local))
+        .instrument(trace_span!("get_proof", client = %local))
         .await;
 
         config.tear_down().await;
@@ -282,7 +369,7 @@ mod test {
                 "invalid response from corenode"
             );
 
-            let txr = TxRequest::Execute();
+            let txr = TxRequest::Execute(get_example_rt());
             c_tob.send(&txr).await.expect("send failed");
 
             let resp =
@@ -299,7 +386,7 @@ mod test {
             let _ = c_tob.close().await;
             let _ = c_node.close().await;
         }
-        .instrument(trace_span!("adder", client = %local))
+        .instrument(trace_span!("request_add", client = %local))
         .await;
 
         config.tear_down().await;

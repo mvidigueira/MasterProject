@@ -3,6 +3,11 @@ extern crate base64;
 
 use std::collections::HashMap;
 
+#[wasmtime_rust::wasmtime]
+pub trait WasmContract {
+    fn execute(&mut self, records: String, args: String) -> String;
+}
+
 pub trait WasiSerializable {
     fn serialize_wasi(&self) -> String;
 }
@@ -34,5 +39,9 @@ pub fn create_result(r: Result<Ledger, String>) -> String {
 }
 
 pub fn serialize_args<T: serde::Serialize>(args: &T) -> String {
-    base64::encode(&bincode::serialize(args).unwrap())
+    serialize_args_from_byte_vec(&bincode::serialize(args).unwrap())
+}
+
+pub fn serialize_args_from_byte_vec(args: &Vec<u8>) -> String {
+    base64::encode(args)
 }

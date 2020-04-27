@@ -2,7 +2,7 @@ use std::env;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicU16, Ordering};
 
-use super::{CoreNode, DataTree, TobServer};
+use super::{CoreNode, DataTree, RuleTransaction, TobServer};
 
 use drop::crypto::key::exchange::Exchanger;
 use drop::net::{
@@ -37,6 +37,10 @@ pub fn next_test_ip4() -> SocketAddr {
         9000 + PORT_OFFSET.fetch_add(1, Ordering::AcqRel),
     )
         .into()
+}
+
+pub fn get_example_rt() -> RuleTransaction {
+    RuleTransaction::new(DataTree::new(), "Alice".to_string(), &(123))
 }
 
 pub struct SetupConfig {

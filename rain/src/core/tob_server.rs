@@ -18,7 +18,7 @@ use tokio::sync::RwLock;
 use tokio::task;
 use tokio::time::timeout;
 
-use tracing::{error, info, trace_span};
+use tracing::{error, debug, info, trace_span};
 use tracing_futures::Instrument;
 
 type ProtectedBeb = Arc<RwLock<BestEffort<TxRequest>>>;
@@ -43,6 +43,9 @@ impl TobServer {
             .await
             .expect("listen failed");
 
+        debug!("waiting to connect to corenodes");
+        debug!("Directory Info: {:#?}", dir_info);
+
         let connector = TcpConnector::new(exchanger.clone());
         let mut dir_connector = DirectoryConnector::new(connector);
         let mut peers = if nr_peer > 0 {
@@ -53,6 +56,8 @@ impl TobServer {
         } else {
             Vec::new()
         };
+
+        debug!("successfully connected to corenodes");
 
         drop(dir_connector);
 
@@ -167,8 +172,8 @@ impl TobRequestHandler {
                 TxRequest::GetProof(_) => {
                     error!("TxRequest::GetProof should be sent directly by a client, not via TOB!");
                 }
-                TxRequest::Execute() => {
-                    self.handle_broadcast(TxRequest::Execute()).await?;
+                TxRequest::Execute(rt) => {
+                    self.handle_broadcast(TxRequest::Execute(rt)).await?;
                 }
             }
         }
@@ -212,7 +217,7 @@ mod test {
         let local = connection.local_addr().expect("getaddr failed");
 
         async move {
-            let txr = TxRequest::Execute();
+            let txr = TxRequest::Execute(get_example_rt());
             connection.send(&txr).await.expect("send failed");
 
             let resp = connection

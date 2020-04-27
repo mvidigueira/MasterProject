@@ -11,6 +11,8 @@ use super::{ClientError, ReplyError};
 
 use futures::future;
 
+use tracing::{info, debug};
+
 pub struct ClientNode {
     corenodes: Vec<(Digest, DirectoryInfo)>,
     connector: TcpConnector,
@@ -26,7 +28,12 @@ impl ClientNode {
         let exchanger = Exchanger::random();
 
         let connector = TcpConnector::new(exchanger.clone());
+
         let mut dir_connector = DirectoryConnector::new(connector);
+
+        debug!("Waiting for corenodes to join directory");
+        debug!("Directory Info: {:#?}", dir_info);
+
         let mut corenodes = if nr_peer > 0 {
             dir_connector
                 .wait(nr_peer, dir_info)
@@ -35,7 +42,11 @@ impl ClientNode {
         } else {
             Vec::new()
         };
+        debug!("Dropping dir connector");
+
         drop(dir_connector);
+
+        debug!("Corenodes have joined directory. Continuing");
 
         let mut corenodes: Vec<(Digest, DirectoryInfo)> = corenodes
             .drain(..)
@@ -123,6 +134,12 @@ mod test {
     use super::super::test::*;
     use super::super::DataTree;
 
+    use tracing::trace_span;
+    use tracing_futures::Instrument;
+
+    use tokio::time::timeout;
+    use std::time::Duration;
+
     #[tokio::test]
     async fn client_get_merkle_proofs() {
         init_logger();
@@ -133,21 +150,32 @@ mod test {
         t.insert("Charlie".to_string(), vec![2u8]);
 
         let config = SetupConfig::setup(3, t.clone()).await;
+        let addr = config.tob_info.addr();
+        let dir_info = &config.dir_info;
 
-        let client_node =
-            ClientNode::new(config.tob_info.addr(), &config.dir_info, 3)
+        async move {
+            let _ = timeout(Duration::from_secs(3), future::pending::<()>()).await;
+
+            let client_node =
+            ClientNode::new(addr, dir_info, 3)
                 .await
                 .expect("client node creation failed");
-        let proof = client_node
-            .get_merkle_proofs(vec![
-                "Alan".to_string(),
-                "Bob".to_string(),
-                "Charlie".to_string(),
-            ])
-            .await
-            .expect("merkle proof error");
 
-        assert!(t.get_validator().validate(&proof));
+            debug!("client node created");
+
+            let proof = client_node
+                .get_merkle_proofs(vec![
+                    "Alan".to_string(),
+                    "Bob".to_string(),
+                    "Charlie".to_string(),
+                ])
+                .await
+                .expect("merkle proof error");
+
+            assert!(t.get_validator().validate(&proof));
+        }
+        .instrument(trace_span!("get_merkle_proofs"))
+        .await;
 
         config.tear_down().await;
     }

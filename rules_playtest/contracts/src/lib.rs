@@ -1,10 +1,8 @@
-extern crate common;
+extern crate wasm_contracts_common;
 extern crate bincode;
 extern crate base64;
 
-use common::records::Ledger;
-use common::records::WasiDeserializable;
-use common::records::create_result;
+use wasm_contracts_common::records::{Ledger, WasiDeserializable, create_result};
 
 use std::collections::HashMap;
 
