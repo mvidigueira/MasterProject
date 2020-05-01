@@ -1,5 +1,5 @@
 [package]
-name = "wasm_contracts_common"
+name = "rain_wasi_common"
 version = "0.1.0"
 authors = ["mvidigueira <mvidigueira@gmail.com>"]
 edition = "2018"
@@ -8,9 +8,8 @@ edition = "2018"
 
 [dependencies]
 bincode = "1.2.1"
-serde = { version = "1.0.102", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
 base64 = "0.11.0"
-wasmtime-rust = "=0.11.0"
 
 [dependencies.wasm-bindgen]
 version = "^0.2"

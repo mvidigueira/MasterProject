@@ -22,7 +22,8 @@ use tokio::time::timeout;
 use tracing::{error, info, trace_span};
 use tracing_futures::Instrument;
 
-use wasm_contracts_common::{Ledger, WasiSerializable, WasmContract};
+use rain_wasi_common::{Ledger, WasiSerializable};
+use rain_wasmtime_contract::WasmContract;
 
 const RECORD_LIMIT: usize = 400;
 
@@ -198,7 +199,7 @@ impl TxRequestHandler {
                     Ok(c) => c,
                 };
 
-                let args = wasm_contracts_common::serialize_args_from_byte_vec(
+                let args = rain_wasi_common::serialize_args_from_byte_vec(
                     &rt.rule_arguments,
                 );
 
@@ -208,7 +209,7 @@ impl TxRequestHandler {
                 let result =
                     &contract.execute(input_ledger.serialize_wasi(), args);
 
-                let mut output_ledger = match wasm_contracts_common::extract_result(
+                let mut output_ledger = match rain_wasi_common::extract_result(
                     result,
                 ) {
                     Err(e) => {

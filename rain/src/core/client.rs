@@ -5,23 +5,23 @@ use drop::crypto::key::exchange::Exchanger;
 use drop::crypto::{self, Digest};
 use drop::net::{Connector, DirectoryConnector, DirectoryInfo, TcpConnector};
 
-use super::{closest, DataTree, RecordID, TxRequest, TxResponse};
+use super::{closest, DataTree, RecordID, TxRequest, TxResponse, RuleTransaction};
 
 use super::{ClientError, ReplyError};
 
 use futures::future;
 
-use tracing::{info, debug};
+use tracing::{debug};
 
 pub struct ClientNode {
     corenodes: Vec<(Digest, DirectoryInfo)>,
     connector: TcpConnector,
-    tob_addr: SocketAddr,
+    tob_info: DirectoryInfo,
 }
 
 impl ClientNode {
     pub async fn new(
-        tob_addr: SocketAddr,
+        tob_info: &DirectoryInfo,
         dir_info: &DirectoryInfo,
         nr_peer: usize,
     ) -> Result<Self, ClientError> {
@@ -32,7 +32,6 @@ impl ClientNode {
         let mut dir_connector = DirectoryConnector::new(connector);
 
         debug!("Waiting for corenodes to join directory");
-        debug!("Directory Info: {:#?}", dir_info);
 
         let mut corenodes = if nr_peer > 0 {
             dir_connector
@@ -42,11 +41,8 @@ impl ClientNode {
         } else {
             Vec::new()
         };
-        debug!("Dropping dir connector");
 
         drop(dir_connector);
-
-        debug!("Corenodes have joined directory. Continuing");
 
         let mut corenodes: Vec<(Digest, DirectoryInfo)> = corenodes
             .drain(..)
@@ -60,7 +56,7 @@ impl ClientNode {
         let ret = Self {
             corenodes: corenodes,
             connector: connector,
-            tob_addr: tob_addr,
+            tob_info: tob_info.clone(),
         };
 
         Ok(ret)
@@ -125,6 +121,30 @@ impl ClientNode {
             _ => return Err(ReplyError::new().into()),
         }
     }
+
+    pub async fn send_transaction_request<T: classic::Serialize>(
+        &self,
+        proof: DataTree,
+        rule: RecordID,
+        args: &T,
+    ) -> Result<(), ClientError> {
+        let rt = RuleTransaction::new(proof, rule, args);
+
+        let exchanger = Exchanger::random();
+        let connector = TcpConnector::new(exchanger);
+        let mut connection = connector
+            .connect(self.tob_info.public(), &self.tob_info.addr())
+            .await?;
+
+        let txr = TxRequest::Execute(rt);
+        connection.send(&txr).await?;
+
+        let resp = connection
+            .receive::<TxResponse>()
+            .await?;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -137,9 +157,6 @@ mod test {
     use tracing::trace_span;
     use tracing_futures::Instrument;
 
-    use tokio::time::timeout;
-    use std::time::Duration;
-
     #[tokio::test]
     async fn client_get_merkle_proofs() {
         init_logger();
@@ -150,14 +167,12 @@ mod test {
         t.insert("Charlie".to_string(), vec![2u8]);
 
         let config = SetupConfig::setup(3, t.clone()).await;
-        let addr = config.tob_info.addr();
+        let tob_info = &config.tob_info;
         let dir_info = &config.dir_info;
 
         async move {
-            let _ = timeout(Duration::from_secs(3), future::pending::<()>()).await;
-
             let client_node =
-            ClientNode::new(addr, dir_info, 3)
+            ClientNode::new(tob_info, dir_info, 3)
                 .await
                 .expect("client node creation failed");
 

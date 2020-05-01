@@ -10,7 +10,8 @@ edition = "2018"
 drop = { path = "/home/manuel/Documents/M4/rust_playground/drop" }
 macros = { path = "/home/manuel/Documents/M4/rust_playground/drop/macros" }
 merkle = { path = "../merkle" }
-wasm_contracts_common = { path = "../wasm_contracts_common" }
+rain_wasi_common = { path = "../rules_playtest/rain_wasi_common" }
+rain_wasmtime_contract = { path = "../rules_playtest/rain_wasmtime_contract" }
 classic = { path = "/home/manuel/Documents/M4/rust_playground/classic" }
 serde = "1.0.102"
 tokio = "0.2.0"

@@ -140,7 +140,7 @@ pub async fn setup_dir(
             .instrument(trace_span!("dir_serve")),
     );
 
-    let dir_info = DirectoryInfo::from((dir_public, dir_addr));
+    let dir_info = (dir_public, dir_addr).into();
     (exit_dir, handle_dir, dir_info)
 }
 

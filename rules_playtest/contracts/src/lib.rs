@@ -1,8 +1,8 @@
-extern crate wasm_contracts_common;
+extern crate rain_wasi_common;
 extern crate bincode;
 extern crate base64;
 
-use wasm_contracts_common::records::{Ledger, WasiDeserializable, create_result};
+use rain_wasi_common::{Ledger, WasiDeserializable, create_result};
 
 use std::collections::HashMap;
 
@@ -35,7 +35,7 @@ fn deserialize_args(enc: &str) -> (String, String, String, i32) {
 }
 
 #[wasm_bindgen]
-pub fn execute(ledger: String, args: String) -> String {
+pub fn transfer(ledger: String, args: String) -> String {
     let mut _cl: ContextLedger = to_context_ledger(Ledger::deserialize_wasi(&ledger));
     let (_requester, _from, _to, _amount) = deserialize_args(&args);
     

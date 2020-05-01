@@ -1373,12 +1373,30 @@ dependencies = [
  "log",
  "macros",
  "merkle",
+ "rain_wasi_common",
+ "rain_wasmtime_contract",
  "serde",
  "tokio",
  "tracing",
  "tracing-futures",
  "tracing-subscriber",
- "wasm_contracts_common",
+]
+
+[[package]]
+name = "rain_wasi_common"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "bincode",
+ "serde",
+ "wasm-bindgen",
+]
+
+[[package]]
+name = "rain_wasmtime_contract"
+version = "0.1.0"
+dependencies = [
+ "wasmtime-rust",
 ]
 
 [[package]]
@@ -2184,17 +2202,6 @@ dependencies = [
  "id-arena",
  "leb128",
  "walrus",
-]
-
-[[package]]
-name = "wasm_contracts_common"
-version = "0.1.0"
-dependencies = [
- "base64",
- "bincode",
- "serde",
- "wasm-bindgen",
- "wasmtime-rust",
 ]
 
 [[package]]

@@ -9,6 +9,6 @@ crate-type = ['cdylib']
 
 [dependencies]
 wasm-bindgen = "=0.2.54"
-wasm_contracts_common = {path="../wasm_contracts_common"}
+rain_wasi_common = {path="../rain_wasi_common"}
 bincode = "1.2.1"
 base64 = "0.11.0"

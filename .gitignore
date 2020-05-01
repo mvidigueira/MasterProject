@@ -1,5 +1,6 @@
 rules_playtest/target
 rules_playtest/contracts/target
-rules_playtest/common/target
+rules_playtest/rain_wasi_common/target
+rules_playtest/rain_wasmtime_contract/target
 merkle/target
 rain/target
