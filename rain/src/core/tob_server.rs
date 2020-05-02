@@ -4,7 +4,7 @@ use std::sync::Arc;
 use drop::crypto::key::exchange::{Exchanger, PublicKey};
 use drop::net::{
     Connection, DirectoryConnector, DirectoryInfo, Listener, TcpConnector,
-    TcpListener,
+    TcpListener, ListenerError,
 };
 
 use super::{TxRequest, TxResponse};
@@ -12,13 +12,13 @@ use classic::{BestEffort, Broadcast, System};
 
 use super::{BroadcastError, TobServerError};
 
-use std::time::Duration;
+use futures::future::{self, Either};
+
 use tokio::sync::oneshot::{channel, Receiver, Sender};
 use tokio::sync::RwLock;
 use tokio::task;
-use tokio::time::timeout;
 
-use tracing::{error, debug, info, trace_span};
+use tracing::{debug, error, info, trace_span};
 use tracing_futures::Instrument;
 
 type ProtectedBeb = Arc<RwLock<BestEffort<TxRequest>>>;
@@ -84,22 +84,27 @@ impl TobServer {
 
     // handle this better, don't use an all encompassing error
     pub async fn serve(mut self) -> Result<(), TobServerError> {
-        let to = Duration::from_secs(1);
+        let mut exit_fut = Some(self.exit);
 
         loop {
-            if self.exit.try_recv().is_ok() {
-                info!("stopping tob server");
-                break;
-            }
-
-            let connection = match timeout(to, self.listener.accept()).await {
-                Ok(Ok(socket)) => socket,
-                Ok(Err(e)) => {
-                    error!("failed to accept client connection: {}", e);
+            let (exit, connection) = match Self::poll_incoming(
+                self.listener.as_mut(),
+                exit_fut.take().unwrap(),
+            )
+            .await
+            {
+                PollResult::Error(e) => {
+                    error!("failed to accept incoming connection: {}", e);
                     return Err(e.into());
                 }
-                Err(_) => continue,
+                PollResult::Exit => {
+                    info!("directory server exiting...");
+                    return Ok(());
+                }
+                PollResult::Incoming(exit, connection) => (exit, connection),
             };
+
+            exit_fut = Some(exit);
 
             let peer_addr = connection.peer_addr()?;
 
@@ -121,13 +126,30 @@ impl TobServer {
                 ),
             );
         }
-
-        Ok(())
     }
 
     pub fn public_key(&self) -> &PublicKey {
         self.listener.exchanger().keypair().public()
     }
+
+    async fn poll_incoming<L: Listener<Candidate = SocketAddr> + ?Sized>(
+        listener: &mut L,
+        exit: Receiver<()>,
+    ) -> PollResult {
+        match future::select(exit, listener.accept()).await {
+            Either::Left(_) => PollResult::Exit,
+            Either::Right((Ok(connection), exit)) => {
+                PollResult::Incoming(exit, connection)
+            }
+            Either::Right((Err(e), _)) => PollResult::Error(e),
+        }
+    }
+}
+
+enum PollResult {
+    Incoming(Receiver<()>, Connection),
+    Error(ListenerError),
+    Exit,
 }
 
 struct TobRequestHandler {
@@ -166,8 +188,6 @@ impl TobRequestHandler {
 
     async fn serve(mut self) -> Result<(), TobServerError> {
         while let Ok(txr) = self.connection.receive::<TxRequest>().await {
-            
-
             match txr {
                 TxRequest::GetProof(_) => {
                     error!("TxRequest::GetProof should be sent directly by a client, not via TOB!");

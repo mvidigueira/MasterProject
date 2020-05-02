@@ -4,13 +4,15 @@ use drop::crypto::key::exchange::Exchanger;
 use drop::crypto::{self, Digest};
 use drop::net::{Connector, DirectoryConnector, DirectoryInfo, TcpConnector};
 
-use super::{closest, DataTree, RecordID, TxRequest, TxResponse, RuleTransaction};
+use super::{
+    closest, DataTree, RecordID, RuleTransaction, TxRequest, TxResponse,
+};
 
 use super::{ClientError, ReplyError};
 
 use futures::future;
 
-use tracing::{debug};
+use tracing::debug;
 
 pub struct ClientNode {
     corenodes: Vec<(Digest, DirectoryInfo)>,
@@ -138,9 +140,7 @@ impl ClientNode {
         let txr = TxRequest::Execute(rt);
         connection.send(&txr).await?;
 
-        let resp = connection
-            .receive::<TxResponse>()
-            .await?;
+        connection.receive::<TxResponse>().await?;
 
         Ok(())
     }
@@ -153,10 +153,7 @@ mod test {
     use super::super::test::*;
     use super::super::DataTree;
 
-    use tokio::time::timeout;
-    use std::time::Duration;
-
-    use tracing::{trace_span, info};
+    use tracing::{trace_span};
     use tracing_futures::Instrument;
 
     #[tokio::test]
@@ -173,8 +170,7 @@ mod test {
         let dir_info = &config.dir_info;
 
         async move {
-            let client_node =
-            ClientNode::new(tob_info, dir_info, 3)
+            let client_node = ClientNode::new(tob_info, dir_info, 3)
                 .await
                 .expect("client node creation failed");
 
@@ -201,8 +197,10 @@ mod test {
     async fn client_send_transaction_request() {
         init_logger();
 
-        let filename = "contract_test/target/wasm32-wasi/release/contract_test.wasm";
-        let rule_buffer = std::fs::read(filename).expect("could not load file into buffer");
+        let filename =
+            "contract_test/target/wasm32-wasi/release/contract_test.wasm";
+        let rule_buffer =
+            std::fs::read(filename).expect("could not load file into buffer");
 
         let mut t = DataTree::new();
         t.insert("Alice".to_string(), (1000i32).to_be_bytes().to_vec());
@@ -214,8 +212,7 @@ mod test {
         let dir_info = &config.dir_info;
 
         async move {
-            let client_node =
-            ClientNode::new(tob_info, dir_info, 1)
+            let client_node = ClientNode::new(tob_info, dir_info, 1)
                 .await
                 .expect("client node creation failed");
 
@@ -231,26 +228,32 @@ mod test {
                 .expect("merkle proof error");
 
             let args = ("Alice".to_string(), "Bob".to_string(), 50i32);
-            client_node.send_transaction_request(proof, "transfer_rule".to_string(), &args).await.expect("error sending request");
+            client_node
+                .send_transaction_request(
+                    proof,
+                    "transfer_rule".to_string(),
+                    &args,
+                )
+                .await
+                .expect("error sending request");
 
-            info!("Awaiting");
-            let _ = timeout(Duration::from_millis(2000), future::pending::<()>()).await;
+            // info!("Awaiting");
+            // let _ = timeout(Duration::from_millis(2000), future::pending::<()>()).await;
 
             let result = client_node
-                .get_merkle_proofs(vec![
-                    "Alice".to_string(),
-                    "Bob".to_string(),
-                ])
+                .get_merkle_proofs(vec!["Alice".to_string(), "Bob".to_string()])
                 .await
                 .expect("merkle proof error");
 
             let mut value_array = [0 as u8; 4];
-            let v = &result.get(&"Alice".to_string()).unwrap()[..value_array.len()];
+            let v =
+                &result.get(&"Alice".to_string()).unwrap()[..value_array.len()];
             value_array.copy_from_slice(v);
             assert_eq!(i32::from_be_bytes(value_array), 950);
 
             let mut value_array = [0 as u8; 4];
-            let v = &result.get(&"Bob".to_string()).unwrap()[..value_array.len()];
+            let v =
+                &result.get(&"Bob".to_string()).unwrap()[..value_array.len()];
             value_array.copy_from_slice(v);
             assert_eq!(i32::from_be_bytes(value_array), 1050);
         }

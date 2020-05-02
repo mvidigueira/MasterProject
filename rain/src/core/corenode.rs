@@ -1,23 +1,27 @@
+use std::collections::HashMap;
 use std::fmt::Display;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 use drop::crypto::key::exchange::{Exchanger, PublicKey};
 use drop::net::{
-    Connection, DirectoryListener, Listener, TcpConnector, TcpListener,
+    Connection, DirectoryListener, Listener, ListenerError, TcpConnector,
+    TcpListener,
 };
 
-use super::{DataTree, RecordID, RuleTransaction, TxRequest, TxResponse};
+use super::{
+    DataTree, RecordID, RecordVal, RuleTransaction, TxRequest, TxResponse,
+};
 use merkle::error::MerkleError;
 
 use super::CoreNodeError;
 
-use std::time::Duration;
+use futures::future::{self, Either};
+
 use tokio::net::ToSocketAddrs;
 use tokio::sync::oneshot::{channel, Receiver, Sender};
 use tokio::sync::RwLock;
 use tokio::task;
-use tokio::time::timeout;
 
 use tracing::{error, info, trace_span};
 use tracing_futures::Instrument;
@@ -73,23 +77,27 @@ impl CoreNode {
 
     // handle this better, don't use an all encompassing error
     pub async fn serve(mut self) -> Result<(), CoreNodeError> {
-        let to = Duration::from_secs(1);
+        let mut exit_fut = Some(self.exit);
 
         loop {
-            if self.exit.try_recv().is_ok() {
-                info!("stopping core node");
-                break;
-            }
-
-            let connection = match timeout(to, self.dir_listener.accept()).await
+            let (exit, connection) = match Self::poll_incoming(
+                &mut self.dir_listener,
+                exit_fut.take().unwrap(),
+            )
+            .await
             {
-                Ok(Ok(socket)) => socket,
-                Ok(Err(e)) => {
-                    error!("failed to accept directory connection: {}", e);
+                PollResult::Error(e) => {
+                    error!("failed to accept incoming connection: {}", e);
                     return Err(e.into());
                 }
-                Err(_) => continue,
+                PollResult::Exit => {
+                    info!("directory server exiting...");
+                    return Ok(());
+                }
+                PollResult::Incoming(exit, connection) => (exit, connection),
             };
+
+            exit_fut = Some(exit);
 
             let peer_addr = connection.peer_addr()?;
 
@@ -116,13 +124,30 @@ impl CoreNode {
                 }.instrument(trace_span!("tob_request_receiver", client = %self.tob_addr)),
             );
         }
-
-        Ok(())
     }
 
     pub fn public_key(&self) -> &PublicKey {
         self.dir_listener.exchanger().keypair().public()
     }
+
+    async fn poll_incoming(
+        dir_listener: &mut DirectoryListener,
+        exit: Receiver<()>,
+    ) -> PollResult {
+        match future::select(exit, dir_listener.accept()).await {
+            Either::Left(_) => PollResult::Exit,
+            Either::Right((Ok(connection), exit)) => {
+                PollResult::Incoming(exit, connection)
+            }
+            Either::Right((Err(e), _)) => PollResult::Error(e),
+        }
+    }
+}
+
+enum PollResult {
+    Incoming(Receiver<()>, Connection),
+    Error(ListenerError),
+    Exit,
 }
 
 struct TxRequestHandler {
@@ -171,7 +196,7 @@ impl TxRequestHandler {
         &mut self,
         rt: RuleTransaction,
     ) -> Result<(), CoreNodeError> {
-        let used_record_count = rt.merkle_proof.len();
+        let used_record_count: usize = rt.merkle_proof.len();
         if used_record_count > RECORD_LIMIT {
             error!("Error processing transaction: record limit exceeded. Limit is {}, rule touches {}", RECORD_LIMIT, used_record_count);
             return Ok(());
@@ -203,12 +228,15 @@ impl TxRequestHandler {
                     &rt.rule_arguments,
                 );
 
-                let input_ledger: Ledger =
-                    rt.merkle_proof.clone_to_vec().into_iter().collect();
+                // removes (k,v) association of rule, for performance
+                let mut input_ledger: Ledger =
+                    rt.merkle_proof.clone_to_vec().into_iter().filter(|(k, _)| k != &rt.rule_record_id).collect();
 
+                // Execute the transaction in the wasm runtime
                 let result =
                     &contract.execute(input_ledger.serialize_wasi(), args);
 
+                // Extract the result
                 let mut output_ledger = match rain_wasi_common::extract_result(
                     result,
                 ) {
@@ -219,31 +247,33 @@ impl TxRequestHandler {
                     Ok(l) => l,
                 };
 
-                let mut new_record_count = 0;
-                for key in output_ledger.keys() {
-                    if !input_ledger.contains_key(key) {
-                        new_record_count += 1;
-                        match rt.merkle_proof.get(key) {
-                            Err(MerkleError::KeyNonExistant) => (),
-                            Err(MerkleError::KeyBehindPlaceholder) => {
-                                error!("Error processing transaction: contract adds or modifies a record outside merkle proof");
-                                return Ok(());
-                            }
-                            Err(MerkleError::IncompatibleTrees) => {
-                                unreachable!()
-                            }
-                            Ok(_) => unreachable!(),
-                        }
+                if let Err(_) = self.verify_new_records(
+                    &input_ledger,
+                    &output_ledger,
+                    &rt.merkle_proof,
+                    used_record_count,
+                ) {
+                    return Ok(());
+                }
 
-                        if used_record_count + new_record_count > RECORD_LIMIT {
-                            error!("Error processing transaction: record limit exceeded. Limit is {}, rule touches {}", RECORD_LIMIT, used_record_count);
-                            return Ok(());
+                for (k, v) in output_ledger.drain() {
+                    match input_ledger.remove(&k) {
+                        None => {
+                            info!("Inserted {:?} into data tree.", (k.clone(), v.clone()));
+                            guard.insert(k, v);
                         }
+                        Some(v2) if v != v2 => {
+                            info!("Inserted {:?} into data tree.", (k.clone(), v.clone()));
+                            guard.insert(k, v);
+                        }
+                        _ => (),
                     }
                 }
 
-                for (k,v) in output_ledger.drain() {
-                    guard.insert(k, v);
+                // check that this is working correctly
+                for (k, _) in input_ledger.drain() {
+                    info!("Removed {:?} from data tree.", k);
+                    guard.remove(&k);
                 }
 
                 info!("Transaction applied: local data successfully updated.");
@@ -255,25 +285,63 @@ impl TxRequestHandler {
         Ok(())
     }
 
+    fn verify_new_records(
+        &self,
+        input_map: &HashMap<RecordID, RecordVal>,
+        output_map: &HashMap<RecordID, RecordVal>,
+        proof: &DataTree,
+        used_record_count: usize,
+    ) -> Result<(), ()> {
+        let mut new_record_count = 0;
+
+        for key in output_map.keys() {
+            if !input_map.contains_key(key) {
+                new_record_count += 1;
+                match proof.get(key) {
+                    Err(MerkleError::KeyNonExistant) => (),
+                    Err(MerkleError::KeyBehindPlaceholder) => {
+                        error!("Error processing transaction: contract adds or modifies a record outside merkle proof");
+                        return Err(());
+                    }
+                    Err(MerkleError::IncompatibleTrees) => unreachable!(),
+                    Ok(_) => unreachable!(),
+                }
+
+                if used_record_count + new_record_count > RECORD_LIMIT {
+                    error!("Error processing transaction: record limit exceeded. Limit is {}, rule touches {}", RECORD_LIMIT, used_record_count);
+                    return Err(());
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     async fn serve(mut self) -> Result<(), CoreNodeError> {
         while let Ok(txr) = self.connection.receive::<TxRequest>().await {
             match txr {
                 TxRequest::GetProof(records) => {
-                    info!("Received getproof request. Arguments {:#?}", records);
+                    info!(
+                        "Received getproof request. Arguments {:#?}",
+                        records
+                    );
 
                     // if self.from_client {
-                        self.handle_get_proof(records).await?;
+                    self.handle_get_proof(records).await?;
                     // } else {
                     //     error!("TxRequest::GetProof should be sent directly by a client, not via TOB!");
                     // }
                 }
                 TxRequest::Execute(rt) => {
-                    info!("Received execute request. Rule: {:#?}", rt.rule_record_id);
+                    info!(
+                        "Received execute request. Rule: {:#?}",
+                        rt.rule_record_id
+                    );
 
                     // if self.from_client {
                     //     error!("Client attempting to execute directly. TxExecute can only come from TOB!");
                     // } else {
-                        self.handle_execute(rt).await?;
+                    self.handle_execute(rt).await?;
                     // }
                 }
             }
@@ -286,7 +354,6 @@ impl TxRequestHandler {
         } else {
             info!("end of TOB connection");
         }
-       
 
         Ok(())
     }
