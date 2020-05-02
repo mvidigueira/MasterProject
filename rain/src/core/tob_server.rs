@@ -166,13 +166,14 @@ impl TobRequestHandler {
 
     async fn serve(mut self) -> Result<(), TobServerError> {
         while let Ok(txr) = self.connection.receive::<TxRequest>().await {
-            info!("Received request {:?}", txr);
+            
 
             match txr {
                 TxRequest::GetProof(_) => {
                     error!("TxRequest::GetProof should be sent directly by a client, not via TOB!");
                 }
                 TxRequest::Execute(rt) => {
+                    info!("Received request {:?}", rt.rule_record_id);
                     self.handle_broadcast(TxRequest::Execute(rt)).await?;
                 }
             }

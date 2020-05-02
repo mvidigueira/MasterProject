@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::net::SocketAddr;
 
 use drop::crypto::key::exchange::Exchanger;
 use drop::crypto::{self, Digest};
@@ -154,7 +153,10 @@ mod test {
     use super::super::test::*;
     use super::super::DataTree;
 
-    use tracing::trace_span;
+    use tokio::time::timeout;
+    use std::time::Duration;
+
+    use tracing::{trace_span, info};
     use tracing_futures::Instrument;
 
     #[tokio::test]
@@ -188,6 +190,69 @@ mod test {
                 .expect("merkle proof error");
 
             assert!(t.get_validator().validate(&proof));
+        }
+        .instrument(trace_span!("get_merkle_proofs"))
+        .await;
+
+        config.tear_down().await;
+    }
+
+    #[tokio::test]
+    async fn client_send_transaction_request() {
+        init_logger();
+
+        let filename = "contract_test/target/wasm32-wasi/release/contract_test.wasm";
+        let rule_buffer = std::fs::read(filename).expect("could not load file into buffer");
+
+        let mut t = DataTree::new();
+        t.insert("Alice".to_string(), (1000i32).to_be_bytes().to_vec());
+        t.insert("Bob".to_string(), (1000i32).to_be_bytes().to_vec());
+        t.insert("transfer_rule".to_string(), rule_buffer);
+
+        let config = SetupConfig::setup(1, t.clone()).await;
+        let tob_info = &config.tob_info;
+        let dir_info = &config.dir_info;
+
+        async move {
+            let client_node =
+            ClientNode::new(tob_info, dir_info, 1)
+                .await
+                .expect("client node creation failed");
+
+            debug!("client node created");
+
+            let proof = client_node
+                .get_merkle_proofs(vec![
+                    "Alice".to_string(),
+                    "Bob".to_string(),
+                    "transfer_rule".to_string(),
+                ])
+                .await
+                .expect("merkle proof error");
+
+            let args = ("Alice".to_string(), "Bob".to_string(), 50i32);
+            client_node.send_transaction_request(proof, "transfer_rule".to_string(), &args).await.expect("error sending request");
+
+            info!("Awaiting");
+            let _ = timeout(Duration::from_millis(2000), future::pending::<()>()).await;
+
+            let result = client_node
+                .get_merkle_proofs(vec![
+                    "Alice".to_string(),
+                    "Bob".to_string(),
+                ])
+                .await
+                .expect("merkle proof error");
+
+            let mut value_array = [0 as u8; 4];
+            let v = &result.get(&"Alice".to_string()).unwrap()[..value_array.len()];
+            value_array.copy_from_slice(v);
+            assert_eq!(i32::from_be_bytes(value_array), 950);
+
+            let mut value_array = [0 as u8; 4];
+            let v = &result.get(&"Bob".to_string()).unwrap()[..value_array.len()];
+            value_array.copy_from_slice(v);
+            assert_eq!(i32::from_be_bytes(value_array), 1050);
         }
         .instrument(trace_span!("get_merkle_proofs"))
         .await;

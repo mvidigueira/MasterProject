@@ -173,7 +173,7 @@ impl TxRequestHandler {
     ) -> Result<(), CoreNodeError> {
         let used_record_count = rt.merkle_proof.len();
         if used_record_count > RECORD_LIMIT {
-            info!("Error processing transaction: record limit exceeded. Limit is {}, rule touches {}", RECORD_LIMIT, used_record_count);
+            error!("Error processing transaction: record limit exceeded. Limit is {}, rule touches {}", RECORD_LIMIT, used_record_count);
             return Ok(());
         }
 
@@ -181,19 +181,19 @@ impl TxRequestHandler {
 
         let t = guard.get_validator();
         if !t.validate(&rt.merkle_proof) {
-            info!("Error processing transaction: invalid merkle proof");
+            error!("Error processing transaction: invalid merkle proof");
             return Ok(());
         }
 
         match rt.merkle_proof.get(&rt.rule_record_id) {
             Err(_) => {
-                info!("Error processing transaction: rule is missing from merkle proof");
+                error!("Error processing transaction: rule is missing from merkle proof");
                 return Ok(());
             }
             Ok(bytes) => {
                 let mut contract = match WasmContract::load_bytes(bytes) {
-                    Err(_) => {
-                        info!("Error processing transaction: error loading wasi contract");
+                    Err(e) => {
+                        error!("Error processing transaction: error loading wasi contract: {:?}", e);
                         return Ok(());
                     }
                     Ok(c) => c,
@@ -213,7 +213,7 @@ impl TxRequestHandler {
                     result,
                 ) {
                     Err(e) => {
-                        info!("Error processing transaction: contract output an error: {}", e);
+                        error!("Error processing transaction: contract output an error: {}", e);
                         return Ok(());
                     }
                     Ok(l) => l,
@@ -226,7 +226,7 @@ impl TxRequestHandler {
                         match rt.merkle_proof.get(key) {
                             Err(MerkleError::KeyNonExistant) => (),
                             Err(MerkleError::KeyBehindPlaceholder) => {
-                                info!("Error processing transaction: contract adds or modifies a record outside merkle proof");
+                                error!("Error processing transaction: contract adds or modifies a record outside merkle proof");
                                 return Ok(());
                             }
                             Err(MerkleError::IncompatibleTrees) => {
@@ -236,7 +236,7 @@ impl TxRequestHandler {
                         }
 
                         if used_record_count + new_record_count > RECORD_LIMIT {
-                            info!("Error processing transaction: record limit exceeded. Limit is {}, rule touches {}", RECORD_LIMIT, used_record_count);
+                            error!("Error processing transaction: record limit exceeded. Limit is {}, rule touches {}", RECORD_LIMIT, used_record_count);
                             return Ok(());
                         }
                     }
@@ -257,29 +257,36 @@ impl TxRequestHandler {
 
     async fn serve(mut self) -> Result<(), CoreNodeError> {
         while let Ok(txr) = self.connection.receive::<TxRequest>().await {
-            info!("Received request {:?}", txr);
-
             match txr {
                 TxRequest::GetProof(records) => {
-                    if self.from_client {
+                    info!("Received getproof request. Arguments {:#?}", records);
+
+                    // if self.from_client {
                         self.handle_get_proof(records).await?;
-                    } else {
-                        error!("TxRequest::GetProof should be sent directly by a client, not via TOB!");
-                    }
+                    // } else {
+                    //     error!("TxRequest::GetProof should be sent directly by a client, not via TOB!");
+                    // }
                 }
                 TxRequest::Execute(rt) => {
-                    if self.from_client {
-                        error!("Client attempting to execute directly. TxExecute can only come from TOB!");
-                    } else {
+                    info!("Received execute request. Rule: {:#?}", rt.rule_record_id);
+
+                    // if self.from_client {
+                    //     error!("Client attempting to execute directly. TxExecute can only come from TOB!");
+                    // } else {
                         self.handle_execute(rt).await?;
-                    }
+                    // }
                 }
             }
         }
 
         self.connection.close().await?;
 
-        info!("end of TOB connection");
+        if self.from_client {
+            info!("end of client connection");
+        } else {
+            info!("end of TOB connection");
+        }
+       
 
         Ok(())
     }

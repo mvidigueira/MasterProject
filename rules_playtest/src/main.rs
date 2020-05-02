@@ -29,7 +29,7 @@ fn to_context_ledger(l: Ledger) -> HashMap<String, i32> {
 }
 
 fn main() {
-    let filename = "contracts/target/wasm32-wasi/release/wasm_string_test.wasm";
+    let filename = "contract_1/target/wasm32-wasi/release/wasm_string_test.wasm";
     let buffer = std::fs::read(filename).expect("could not load file into buffer");
 
     let mut contract = WasmContract::load_bytes(buffer).expect("failed to load bytes");
@@ -41,7 +41,7 @@ fn main() {
     c_ledger.insert("Bob".to_string(), 0);
     let ledger: Ledger = to_ledger(c_ledger);
     
-    let y = &contract.transfer(ledger.serialize_wasi(), args);
+    let y = &contract.execute(ledger.serialize_wasi(), args);
     match extract_result(y) {
         Err(s) => println!("Error: {}", s),
         Ok(l) => println!("{:#?}", to_context_ledger(l))

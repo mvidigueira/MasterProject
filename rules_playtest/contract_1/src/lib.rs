@@ -35,7 +35,7 @@ fn deserialize_args(enc: &str) -> (String, String, String, i32) {
 }
 
 #[wasm_bindgen]
-pub fn transfer(ledger: String, args: String) -> String {
+pub fn execute(ledger: String, args: String) -> String {
     let mut _cl: ContextLedger = to_context_ledger(Ledger::deserialize_wasi(&ledger));
     let (_requester, _from, _to, _amount) = deserialize_args(&args);
     

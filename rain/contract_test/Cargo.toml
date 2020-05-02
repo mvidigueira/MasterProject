@@ -1,0 +1,14 @@
+[package]
+name = "contract_test"
+version = "0.1.0"
+authors = ["mvidigueira <mvidigueira@gmail.com>"]
+edition = "2018"
+
+[lib]
+crate-type = ['cdylib']
+
+[dependencies]
+wasm-bindgen = "=0.2.54"
+rain_wasi_common = {path="../../rules_playtest/rain_wasi_common"}
+bincode = "1.2.1"
+base64 = "0.11.0"
