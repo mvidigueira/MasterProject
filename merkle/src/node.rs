@@ -178,9 +178,39 @@ where
         Q: Serialize + Eq,
     {
         match self {
-            Node::Internal(n) => n.get_internal(k, depth, k_digest),
-            Node::Placeholder(_) => Err(KeyBehindPlaceholder),
-            Node::Leaf(n) => n.get_internal(k),
+            Node::Internal(i) => i.get_internal(k, depth, k_digest),
+            Node::Placeholder(ph) => Err(KeyBehindPlaceholder(ph.hash())),
+            Node::Leaf(l) => l.get_internal(k),
+        }
+    }
+
+    /// Returns a vector with all digests (hashes) on the path to key k from the underlying tree.
+    /// 
+    /// The first element corresponds to the digest of the leaf with the key (or the placeholder it is behind),
+    /// moving up all the way to the digest of the tree root.
+    pub fn get_path_digests<Q: ?Sized>(&self, k: &Q, depth: u32) -> Vec<Digest>
+    where
+        K: Borrow<Q>,
+        Q: Serialize + Eq,
+    {
+        let d = crypto::hash(&k).unwrap();
+        self.get_path_digests_internal(k, depth, &d)
+    }
+
+    fn get_path_digests_internal<Q: ?Sized>(
+        &self,
+        k: &Q,
+        depth: u32,
+        k_digest: &Digest,
+    ) -> Vec<Digest>
+    where
+        K: Borrow<Q>,
+        Q: Serialize + Eq,
+    {
+        match self {
+            Node::Internal(i) => i.get_path_digests_internal(k, depth, k_digest),
+            Node::Placeholder(ph) => vec!(ph.hash()),
+            Node::Leaf(l) => vec!(l.hash()),
         }
     }
 
@@ -312,7 +342,19 @@ where
         match self {
             Node::Internal(i) => i.collect(vec),
             Node::Placeholder(_) => (),
-            Node::Leaf(l) => l.collect(vec),
+            Node::Leaf(l) => vec.push((l.key().clone(), l.value().clone())),
+        }
+    }
+
+    /// Recursively clones and inserts all key-value pairs into the provided vector
+    /// 
+    /// TODO: this method should eventually be replaced with one that returns ~IntoIter<&K>
+    /// (requires explicit lifetime declaration)
+    pub fn collect_keys(&self, vec: &mut Vec<K>) {
+        match self {
+            Node::Internal(i) => i.collect_keys(vec),
+            Node::Placeholder(_) => (),
+            Node::Leaf(l) => vec.push(l.key().clone()),
         }
     }
 
@@ -324,6 +366,7 @@ where
             Node::Leaf(_) => 1,
         }
     }
+
 }
 
 impl<K, V> Hashable for Node<K, V>
@@ -457,10 +500,6 @@ where
         } else {
             (None, Some(self)) // consider refactoring (return an error)
         }
-    }
-
-    pub fn collect(&self, vec: &mut Vec<(K, V)>) {
-        vec.push((self.key().clone(), self.value().clone()));
     }
 }
 
@@ -612,6 +651,32 @@ where
             None => Err(KeyNonExistant),
         }
     }
+    
+    fn get_path_digests_internal<Q: ?Sized>(
+        &self,
+        k: &Q,
+        depth: u32,
+        k_digest: &Digest,
+    ) -> Vec<Digest>
+    where
+        K: Borrow<Q>,
+        Q: Serialize + Eq,
+    {
+        let side = if bit(k_digest.as_ref(), depth as u8) {
+            &self.right
+        } else {
+            &self.left
+        };
+
+        match side {
+            Some(n) => { 
+                let mut v = n.as_ref().get_path_digests_internal(k, depth + 1, k_digest);
+                v.push(self.hash());
+                v
+            },
+            None => vec!(Placeholder::default().hash(), self.hash()),
+        }
+    }
 
     fn insert_internal(
         mut self,
@@ -689,6 +754,10 @@ where
     fn merge_unchecked(&mut self, other: &Self) {
         match (&mut self.left, other.left()) {
             (None, None) => (),
+            (None, Some(b)) if b.is_placeholder() => (),
+            (Some(a), None) if a.is_placeholder() => {
+                self.left = None;
+            }
             (Some(a), Some(b)) if a.is_placeholder() && b.is_placeholder() => {
                 ()
             }
@@ -705,6 +774,10 @@ where
 
         match (&mut self.right, other.right()) {
             (None, None) => (),
+            (None, Some(b)) if b.is_placeholder() => (),
+            (Some(a), None) if a.is_placeholder() => {
+                self.right = None;
+            }
             (Some(a), Some(b)) if a.is_placeholder() && b.is_placeholder() => {
                 ()
             }
@@ -731,7 +804,18 @@ where
         }
     }
 
-    pub fn count(&self) -> usize {
+    fn collect_keys(&self, vec: &mut Vec<K>) {
+        match &self.left {
+            None => (),
+            Some(n) => n.collect_keys(vec),
+        }
+        match &self.right {
+            None => (),
+            Some(n) => n.collect_keys(vec),
+        }
+    }
+
+    fn count(&self) -> usize {
         let l_count = match &self.left {
             None => 0,
             Some(n) => n.count(),
@@ -857,7 +941,7 @@ where
                     Err(e) => Err(e),
                 }
             }
-            Node::Placeholder(_) => Err(KeyBehindPlaceholder),
+            Node::Placeholder(ph) => Err(KeyBehindPlaceholder(ph.hash())),
             Node::Leaf(n) => match n.get_proof_single_internal(key) {
                 Ok(n) => Ok(n.into()),
                 Err(e) => Err(e),
@@ -925,7 +1009,7 @@ where
         };
 
         let side_b = match side_b {
-            None => None,
+            None => Some(Placeholder::default().into()),
             Some(n) => Some(Placeholder::new(n.hash()).into()),
         };
 
@@ -1618,6 +1702,7 @@ mod tests {
 
         let ph_bob: Placeholder = Leaf::new("Bob", 0x01).into();
         let ph_aar: Placeholder = Leaf::new("Aaron", 0x02).into();
+        let ph_def: Placeholder = Placeholder::default();
 
         let d1 = proof.left().unwrap().internal_ref();
         let d2 = d1.right().unwrap().internal_ref();
@@ -1628,12 +1713,12 @@ mod tests {
         let d7 = d6.right().unwrap().internal_ref();
 
         assert_eq!(*proof.right().unwrap().placeholder_ref(), ph_aar);
-        assert!(d1.left().is_none());
-        assert!(d2.left().is_none());
-        assert!(d3.right().is_none());
-        assert!(d4.right().is_none());
-        assert!(d5.right().is_none());
-        assert!(d6.left().is_none());
+        assert_eq!(*d1.left().unwrap().placeholder_ref(), ph_def);
+        assert_eq!(*d2.left().unwrap().placeholder_ref(), ph_def);
+        assert_eq!(*d3.right().unwrap().placeholder_ref(), ph_def);
+        assert_eq!(*d4.right().unwrap().placeholder_ref(), ph_def);
+        assert_eq!(*d5.right().unwrap().placeholder_ref(), ph_def);
+        assert_eq!(*d6.left().unwrap().placeholder_ref(), ph_def);
         assert_eq!(*d7.right().unwrap().placeholder_ref(), ph_bob);
         assert_eq!(*d7.left().unwrap().leaf_ref(), Leaf::new("Charlie", 0x03));
     }
@@ -1663,6 +1748,15 @@ mod tests {
         assert_eq!(l.leaf(), Leaf::new("Alice", 3));
     }
 
+    macro_rules! assert_behind_ph {
+        ($data:expr) => {
+            match $data {
+                Err(KeyBehindPlaceholder(_)) => (),
+                _ => panic!("key should be behind placeholder"),
+            }
+        };
+    }
+
     #[test]
     fn internal_merge() {
         let l: Node<_, _> = Leaf::new("Bob", 0x01).into(); // L,R,R,L,L,L,R,R
@@ -1671,12 +1765,29 @@ mod tests {
 
         let mut proof = i.get_proof_single("Charlie", 0).unwrap();
         assert_eq!(proof.get("Charlie", 0), Ok(&0x03));
-        assert_eq!(proof.get("Bob", 0), Err(KeyBehindPlaceholder));
-        assert_eq!(proof.get("Aaron", 0), Err(KeyBehindPlaceholder));
+        assert_behind_ph!(proof.get("Bob", 0));
+        assert_behind_ph!(proof.get("Aaron", 0));
 
         proof.merge_unchecked(&i);
         assert_eq!(proof.get("Charlie", 0), Ok(&0x03));
         assert_eq!(proof.get("Bob", 0), Ok(&0x01));
         assert_eq!(proof.get("Aaron", 0), Ok(&0x02));
+    }
+
+    #[test]
+    fn node_get_path_digests() {
+        let l: Node<_, _> = Leaf::new("Bob", 0x01).into(); // L,R,R,L,L,L,R,R
+        let (_, i) = l.insert("Charlie", 0x03, 0); // L,R,R,L,L,L,R,L
+        let (_, i) = i.insert("Aaron", 0x02, 0); // right (R)
+
+        let v1 = i.get_path_digests("Charlie", 0);
+        let v2 = i.get_path_digests("Bob", 0);
+        let v3 = i.get_path_digests("Aaron", 0);
+
+        assert_eq!(v1.len(), 9);
+        assert_eq!(v2.len(), 9);
+        assert_eq!(v3.len(), 2);
+        assert_eq!(v1[1..], v2[1..]);
+        assert_eq!(v1[8], v3[1]);
     }
 }

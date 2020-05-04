@@ -1,6 +1,8 @@
 use crate::node::{Hashable, Leaf, MerkleError, Node, Placeholder};
 use std::borrow::Borrow;
 
+use drop::crypto::Digest;
+
 use serde::{Deserialize, Serialize, Deserializer};
 
 /// A merkle tree supporting both existence and deniability proofs.
@@ -371,7 +373,10 @@ where
     /// let proof = tree.get_proof(&1).unwrap();    // Existence proof
     /// assert!(tree.validate(&proof));
     /// assert_eq!(proof.get(&1), Ok(&"a"));
-    /// assert_eq!(proof.get(&2), Err(KeyBehindPlaceholder));
+    /// match proof.get(&2) {
+    ///     Err(KeyBehindPlaceholder(_)) => (),
+    ///     _ => unreachable!(),
+    /// }
     ///
     /// let proof = tree.get_proof(&3).unwrap();    // Deniability proof (non-existence)
     /// assert!(tree.validate(&proof));
@@ -423,6 +428,15 @@ where
         }
     }
 
+    // pub fn consistent_with(&self, proof: &Proof<K, V>) -> bool {
+    //     match (&self.root, &proof.root) {
+    //         (None, None) => true,
+    //         (None, Some(n)) => Placeholder::default().hash() == n.hash(),
+    //         (Some(n), None) => n.hash() == Placeholder::default().hash(),
+    //         (Some(n), Some(p)) => n.hash() == p.hash(),
+    //     }
+    // }
+
     /// Returns a "validator": a new tree with a single (placeholder) node compatible with
     /// the previous tree (i.e. with the same hash).
     ///
@@ -462,6 +476,11 @@ where
                 root: Some(Placeholder::from(n).into()),
             },
         }
+    }
+
+    /// Returns the `Digest` corresponding to the root of the Tree.
+    pub fn root_hash(&self) -> Digest {
+        self.get_validator().root.unwrap().hash()
     }
 
     /// Merges two *compatible* trees, modifying the first.
@@ -525,11 +544,10 @@ where
         Ok(())
     }
 
-    /// Copies the tree's key-value pairs, pushing them into the provided vector.
+    /// Copies the tree's key-value pairs, returning a vector.
     /// 
     /// The key-value pairs are inserted by increasing order of the hashes of the keys, as per [`hash`].
     ///
-    /// [`Vec`]: https://doc.rust-lang.org/std/vec/struct.Vec.html
     /// [`hash`]: ../drop/crypto/hash/fn.hash.html
     /// 
     /// # Examples
@@ -556,6 +574,36 @@ where
         vec
     }
 
+    /// Copies the tree's keys, returning a vector.
+    /// 
+    /// The keys pairs are inserted by increasing order of the hashes of the keys, as per [`hash`].
+    ///
+    /// [`hash`]: ../drop/crypto/hash/fn.hash.html
+    /// 
+    /// # Examples
+    ///
+    /// ```
+    /// extern crate merkle;
+    /// use merkle::Tree;
+    ///
+    /// let mut tree = Tree::new();
+    /// tree.insert(1, "a");
+    /// tree.insert(2, "b");
+    /// 
+    /// let keys = tree.clone_keys_to_vec();
+    /// 
+    /// assert!(keys.contains(&1));
+    /// assert!(keys.contains(&2));
+    /// ```
+    pub fn clone_keys_to_vec(&self) -> Vec<K> {
+        let mut vec = Vec::new();
+        match &self.root {
+            None => (),
+            Some(n) => n.collect_keys(&mut vec),
+        }
+        vec
+    }
+
 
     /// Returns the number of elements in the tree, also referred to as its 'length'.
     /// 
@@ -575,6 +623,21 @@ where
         match &self.root {
             None => 0,
             Some(n) => n.count(),
+        }
+    }
+
+    /// Returns a vector with all digests (hashes) on the path to key k from the underlying tree.
+    /// 
+    /// The first element corresponds to the digest of the leaf with the key (or the placeholder it is behind),
+    /// moving up all the way to the digest of the tree root.
+    pub fn get_path_digests<Q: ?Sized>(&self, k: &Q) -> Vec<Digest>
+    where
+        K: Borrow<Q>,
+        Q: Serialize + Eq,
+    {
+        match &self.root {
+            None => vec!(Placeholder::default().hash()),
+            Some(r) => r.get_path_digests(k, 0),
         }
     }
 }
@@ -606,6 +669,15 @@ mod tests {
         assert_eq!(tree.get(&2), Err(KeyNonExistant));
     }
 
+    macro_rules! assert_behind_ph {
+        ($data:expr) => {
+            match $data {
+                Err(KeyBehindPlaceholder(_)) => (),
+                _ => panic!("key should be behind placeholder"),
+            }
+        };
+    }
+
     #[test]
     fn get_err() {
         let mut tree = Tree::new();
@@ -613,7 +685,7 @@ mod tests {
         tree.insert("Bob", 1);
         let proof = tree.get_proof("Aaron").unwrap();
 
-        assert_eq!(proof.get("Bob"), Err(KeyBehindPlaceholder));
+        assert_behind_ph!(proof.get("Bob"));
     }
 
     #[test]
@@ -647,8 +719,8 @@ mod tests {
 
         let proof = tree.get_proof("Bob").unwrap();
         assert_eq!(proof.get("Bob"), Ok(&2));
-        assert_eq!(proof.get("Aaron"), Err(KeyBehindPlaceholder));
-        assert_eq!(proof.get("Charlie"), Err(KeyBehindPlaceholder));
+        assert_behind_ph!(proof.get("Aaron"));
+        assert_behind_ph!(proof.get("Charlie"));
     }
 
     #[test]
@@ -672,10 +744,7 @@ mod tests {
 
         let proof = tree.get_proof("Charlie").unwrap();
 
-        assert_eq!(proof.get("Aaron"), Err(KeyBehindPlaceholder));
-
-        let err = proof.get_proof("Aaron").unwrap_err();
-        assert_eq!(err, KeyBehindPlaceholder);
+        assert_behind_ph!(proof.get("Aaron"));
     }
 
     #[test]
