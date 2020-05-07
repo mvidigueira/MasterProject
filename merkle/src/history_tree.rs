@@ -6,32 +6,50 @@ use std::collections::VecDeque;
 
 use drop::crypto::Digest;
 
-use serde::{Deserialize, Serialize};
+use serde::{Serialize};
 
-#[derive(Debug, Serialize, Deserialize, Default, Eq, PartialEq, Clone, Hash)]
-pub struct HistoryTree<K, V>
+use std::collections::HashSet;
+use std::hash::Hash;
+use std::rc::Rc;
+
+#[derive(Debug)]
+pub struct HistoryTree<K, V, F>
 where
-    K: Serialize + Clone + Eq,
+    K: Serialize + Clone + Eq + Hash,
     V: Serialize + Clone + Eq,
+    F: Fn([u8; 32], usize) -> bool,
 {
     tree: Tree<K, V>,
+    touches: VecDeque<Vec<Rc<K>>>,
+    counts: HashSet<Rc<K>>,
     history: VecDeque<Digest>,
     history_count: usize,
     history_len: usize,
+    is_close: F,
 }
 
-impl<K, V> HistoryTree<K, V>
+impl<K, V, F> HistoryTree<K, V, F>
 where
-    K: Serialize + Clone + Eq,
+    K: Serialize + Clone + Eq + Hash,
     V: Serialize + Clone + Eq,
+    F: Fn([u8; 32], usize) -> bool,
 {
 
-    pub fn new(history_len: usize) -> Self {
+    pub fn new(history_len: usize, is_close: F) -> Self {
+        if history_len < 1 {
+            panic!("history_len must be at least 1");
+        }
+
+        let mut touches = VecDeque::with_capacity(history_len+1);
+        touches.push_front(vec!());
         Self { 
             tree: Tree::new(),
+            touches: touches,
+            counts: HashSet::new(),
             history: VecDeque::with_capacity(history_len),
             history_count: 0,
             history_len: history_len,
+            is_close: is_close,
         }
     }
 
@@ -44,7 +62,8 @@ where
     }
 
     pub fn insert(&mut self, k: K, v: V) -> Option<V> {
-        self.tree.insert(k, v)
+        self.add_touch(&k);
+        self.tree.insert_with_count(k, v, self.history_count)
     }
 
     pub fn remove<Q: ?Sized>(&mut self, k: &Q) -> Option<V>
@@ -66,6 +85,26 @@ where
         self.tree.get_proof(k)
     }
 
+    // unoptimized
+    pub fn get_proofs<'b, II, Q: ?Sized>(
+        &self,
+        keys: II,
+    ) -> Result<Proof<K, V>, MerkleError>
+    where
+        K: 'b + Borrow<Q>,
+        Q: 'b + Serialize + Eq,
+        II: IntoIterator<Item=&'b Q>,
+    {
+        let mut t = self.tree.get_validator();
+        for k in keys.into_iter() {
+            match self.tree.get_proof(k) {
+                Err(e) => return Err(e),
+                Ok(p) => t.merge(&p)?,
+            }
+        }
+        Ok(t)
+    }
+
     pub fn consistent_with(&self, proof: &Proof<K, V>) -> bool {
         if !self.history.contains(&proof.root_hash()) {
             return false;
@@ -82,8 +121,11 @@ where
                     return false;
                 }
                 Err(MerkleError::KeyBehindPlaceholder(d)) => {
-                    if !proof.get_path_digests(&k).contains(&d) {
-                        return false;
+                    match proof.find_in_path(&k, &d) {
+                        Err(()) => {
+                            return false;
+                        }
+                        _ => (),
                     }
                 }
                 Err(MerkleError::IncompatibleTrees) => unreachable!(),
@@ -93,7 +135,6 @@ where
         true
     }
 
-    // TODO: introduce tests
     pub fn consistent_with_inserts(&self, proof: &Proof<K, V>, new_inserts: &Vec<K>) -> bool {
         if !self.history.contains(&proof.root_hash()) {
             return false;
@@ -113,8 +154,11 @@ where
                 }
                 Err(MerkleError::KeyNonExistant) => (),
                 Err(MerkleError::KeyBehindPlaceholder(d)) => {
-                    if !proof.get_path_digests(&k).contains(&d) {
-                        return false;
+                    match proof.find_in_path(&k, &d) {
+                        Err(()) => {
+                            return false;
+                        }
+                        _ => (),
                     }
                 }
                 Err(MerkleError::IncompatibleTrees) => unreachable!(),
@@ -128,8 +172,43 @@ where
         self.tree.get_validator()
     }
 
-    pub fn merge(&mut self, other: &Self) -> Result<(), MerkleError> {
-        unimplemented!();
+    fn add_touch(&mut self, k: &K) {
+        let rc_k = Rc::new(k.clone());
+        let rc_k = match self.counts.get(&rc_k) {
+            None => {
+                self.counts.insert(Rc::clone(&rc_k));
+                rc_k
+            }
+            Some(rc_k) => Rc::clone(rc_k),
+        };
+
+        self.touches.front_mut().expect("touches vec has no elements").push(rc_k);
+    }
+
+    // WARNING: behaviour is unspecified if the tree is not consistent with the proof, including new_inserts.
+    pub fn merge_consistent(&mut self, proof: &Tree<K, V>, new_inserts: &Vec<K>) {
+        let existing_keys = proof.clone_keys_to_vec();
+        for k in existing_keys.iter() {
+            self.tree.extend_knowledge(k, self.history_count, proof);
+            self.add_touch(k);
+        }
+
+        for k in new_inserts.iter() {
+            self.tree.extend_knowledge(k, self.history_count, proof);
+        }
+    }
+
+    fn pop_touches(&mut self) {
+        let touched_records = self.touches.pop_back().unwrap();
+
+        let ancient_history = std::cmp::max(self.history_count-self.history_len, 0);
+        for k in touched_records {
+            self.tree.replace_with_placeholder(k.as_ref(), ancient_history, &self.is_close);
+
+            if Rc::strong_count(&k) == 2 {  // this is the last reference (excluding hashset)
+                self.counts.remove(&k);
+            }
+        }
     }
 
     pub fn clone_to_vec(&self) -> Vec<(K, V)> {
@@ -144,10 +223,12 @@ where
     pub fn push_history(&mut self) {
         if self.history.len() == self.history_len {
             self.history.pop_back();
+            self.pop_touches();
         }
         self.history.push_front(self.tree.root_hash());
+        self.touches.push_front(vec!());
 
-        // TODO: Don't forget to replace old, non-"close" records with placeholders!
+        self.history_count += 1;
     }
 }
 
@@ -160,10 +241,18 @@ pub type Validator<K, V> = Tree<K, V>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::util::{get_is_close_fn, closest};
+
+    use std::convert::TryFrom;
+    macro_rules! h2d {
+        ($data:expr) => {
+            Digest::try_from($data).expect("failed to create digest")
+        };
+    }
 
     #[test]
     fn consistent_inserts_1() {
-        let mut h_tree = HistoryTree::new(10);
+        let mut h_tree = HistoryTree::new(10, |_,_| false);
     
         h_tree.insert("Alice", 1);
         h_tree.push_history();
@@ -181,7 +270,7 @@ mod tests {
 
     #[test]
     fn consistent_inserts_2() {
-        let mut h_tree = HistoryTree::new(10);
+        let mut h_tree = HistoryTree::new(10, |_,_| false);
     
         h_tree.insert("Alice", 1);
         h_tree.push_history();
@@ -201,7 +290,7 @@ mod tests {
 
     #[test]
     fn consistent_was_removed() {
-        let mut h_tree = HistoryTree::new(10);
+        let mut h_tree = HistoryTree::new(10, |_,_| false);
     
         h_tree.insert("Alice", 1);
         h_tree.push_history();
@@ -216,7 +305,7 @@ mod tests {
 
     #[test]
     fn consistent_was_replaced_with_placeholder_1() {
-        let mut h_tree = HistoryTree::new(10);
+        let mut h_tree = HistoryTree::new(10, |_,_| false);
     
         h_tree.insert("Bob", 1);
         h_tree.push_history();
@@ -231,8 +320,7 @@ mod tests {
 
         // This is basically replacing ("Bob", 1) with a placeholder,
         // as if it was too far back in history and "not close":
-        let mut tree = h_tree.get_proof("Charlie").unwrap();
-        tree.merge(&h_tree.get_proof("Aaron").unwrap()).unwrap();
+        let tree = h_tree.get_proofs(["Charlie", "Aaron"].iter()).unwrap();
         h_tree.tree = tree;
 
         assert!(h_tree.consistent_with(&proof));
@@ -240,7 +328,7 @@ mod tests {
 
     #[test]
     fn consistent_was_replaced_with_placeholder_2() {
-        let mut h_tree = HistoryTree::new(10);
+        let mut h_tree = HistoryTree::new(10, |_,_| false);
     
         h_tree.insert("Bob", 1);
         h_tree.push_history();
@@ -251,8 +339,7 @@ mod tests {
         h_tree.insert("Aaron", 3);
         h_tree.push_history();
 
-        let mut proof = h_tree.get_proof("Bob").unwrap();
-        proof.merge(&h_tree.get_proof("Charlie").unwrap()).unwrap();
+        let proof = h_tree.get_proofs(["Bob", "Charlie"].iter()).unwrap();
 
         // This is basically replacing ("Bob", 1) and (Charlie, 2) with a placeholder,
         // as if they are too far back in history and "not close":
@@ -264,7 +351,7 @@ mod tests {
 
     #[test]
     fn consistent_new_inserts_1() {
-        let mut h_tree = HistoryTree::new(10);
+        let mut h_tree = HistoryTree::new(10, |_,_| false);
     
         h_tree.insert("Bob", 1);
         h_tree.push_history();
@@ -287,7 +374,7 @@ mod tests {
 
     #[test]
     fn consistent_new_inserts_2() {
-        let mut h_tree = HistoryTree::new(10);
+        let mut h_tree = HistoryTree::new(10, |_,_| false);
     
         h_tree.insert("Bob", 1);
         h_tree.push_history();
@@ -309,5 +396,213 @@ mod tests {
         h_tree.tree = tree;
 
         assert!(!h_tree.consistent_with_inserts(&proof, &vec!("Alice")));
+    }
+
+    #[test]
+    fn merge_consistent_1() {
+        let mut h_tree = HistoryTree::new(0, |_,_| false);
+    
+        h_tree.insert("Aaron", 1);
+        h_tree.insert("Charlie", 2);
+        h_tree.push_history();
+
+        let late_proof = h_tree.get_proofs(["Aaron", "Charlie"].iter()).unwrap();
+
+        h_tree.insert("Bob", 3);
+        h_tree.insert("Alice", 4);
+        h_tree.insert("Joe", 5);
+        h_tree.insert("Alistair", 6);
+        h_tree.push_history();
+
+        let tree2 = h_tree.get_proofs(["Bob", "Alice", "Joe", "Alistair"].iter()).unwrap();
+        h_tree.tree = tree2;
+
+        assert!(h_tree.consistent_with(&late_proof));
+
+        h_tree.merge_consistent(&late_proof, &vec!());
+
+        assert_eq!(h_tree.get("Aaron"), Ok(&1));
+        assert_eq!(h_tree.get("Charlie"), Ok(&2));
+    }
+
+    #[test]
+    fn merge_consistent_new_inserts() {
+        let mut h_tree = HistoryTree::new(0, |_,_| false);
+    
+        h_tree.insert("Bob", 1);    // L, R, ...
+
+        h_tree.push_history();
+
+        h_tree.insert("Aaron", 2);  // R, ...
+        h_tree.insert("Justin", 3); // L, L,
+
+        h_tree.push_history();
+
+        let late_proof = h_tree.get_proofs(["Vanessa", "Charlie"].iter()).unwrap();
+
+        h_tree.insert("Alice", 4);
+        h_tree.insert("Joe", 5);
+        h_tree.insert("Alistair", 6);
+
+        h_tree.push_history();
+        
+        let tree2 = h_tree.get_proofs(["Aaron", "Justin", "Alice", "Joe", "Alistair"].iter()).unwrap();
+        h_tree.tree = tree2;
+
+        assert!(h_tree.consistent_with_inserts(&late_proof, &vec!("Vanessa", "Charlie")));
+        h_tree.merge_consistent(&late_proof, &vec!("Vanessa", "Charlie"));
+
+        assert_eq!(h_tree.get("Vanessa"), Err(MerkleError::KeyNonExistant));
+        assert_eq!(h_tree.get("Charlie"), Err(MerkleError::KeyNonExistant));
+    }
+
+    #[test]
+    fn push_history_1() {
+        let mut h_tree = HistoryTree::new(2, |_,_| false);
+    
+        h_tree.insert("Bob", 1);    // L, R, ...
+        h_tree.push_history();
+
+        h_tree.insert("Aaron", 2);  // R, ...
+        h_tree.push_history();
+
+        h_tree.get("Bob").expect("Should be OK");
+        h_tree.get("Aaron").expect("Should be OK");
+
+        h_tree.push_history();
+
+        h_tree.get("Bob").expect_err("Should be behind placeholder");
+        h_tree.get("Aaron").expect("Should be OK");
+
+        h_tree.push_history();
+        println!("Counts: {:#?}", h_tree.counts);
+        println!("History: {:#?}", h_tree.history);
+        println!("H_count {:#?}", h_tree.history_count);
+        println!("H_len {:#?}", h_tree.history_len);
+        println!("Touches: {:#?}", h_tree.touches);
+        println!("Tree: {:#?}", h_tree.tree);
+
+        h_tree.get("Bob").expect_err("Should be behind placeholder");
+        h_tree.get("Aaron").expect_err("Should be behind placeholder");
+    }
+
+    #[test]
+    fn push_history_2() {
+        let me = h2d!("6F00000000000000000000000000000000000000000000000000000000000000");
+
+        let v = vec!(
+            h2d!("6300000000000000000000000000000000000000000000000000000000000000"),   // L,R,R,L,L,L,R,R -> closest to Bob, Charlie
+            h2d!("6F00000000000000000000000000000000000000000000000000000000000000"),   // L,R,R,L,R,R,R,R -> closest to Vanessa
+            h2d!("8000000000000000000000000000000000000000000000000000000000000000"),   // R -> closest to Aaron
+        );
+
+        let is_close = get_is_close_fn(me, v);
+
+        let mut h_tree = HistoryTree::new(2, is_close);
+    
+        h_tree.insert("Bob", 1);    // L, R, ...
+        h_tree.insert("Charlie", 2);
+        h_tree.push_history();
+
+        let proof = h_tree.get_proofs(["Bob", "Charlie"].iter()).unwrap();
+
+        h_tree.insert("Aaron", 2);  // R, ...
+        h_tree.push_history();
+
+        h_tree.get("Bob").expect("Should be OK");
+        h_tree.get("Charlie").expect("Should be OK");
+        h_tree.get("Aaron").expect("Should be OK");
+
+        // println!("{:#?}", h_tree.tree);
+        // assert!(false);
+
+        h_tree.push_history();
+
+        h_tree.get("Bob").expect_err("Should be behind placeholder");
+        h_tree.get("Charlie").expect_err("Should be behind placeholder");
+        h_tree.get("Aaron").expect("Should be OK");
+
+        let p = h_tree.get_proof("Vanessa").expect("Could not get deniability proof for 'Vanessa'");
+        match p.get("Vanessa") {
+            Err(MerkleError::KeyNonExistant) => (),
+            _ => panic!("'Vanessa' should be non existant!"),
+        }
+
+        h_tree.insert("Vanessa", 42);
+        h_tree.merge_consistent(&proof, &vec!());
+
+        h_tree.push_history();
+
+        h_tree.get("Bob").expect("Should be OK");
+        h_tree.get("Charlie").expect("Should be OK");
+        h_tree.get("Vanessa").expect("Should be OK");
+        h_tree.get("Aaron").expect_err("Should be behind placeholder");
+
+        h_tree.push_history();
+
+        h_tree.get("Bob").expect("Should be OK");
+        h_tree.get("Charlie").expect("Should be OK");
+        h_tree.get("Vanessa").expect("Should be OK");
+        h_tree.get("Aaron").expect_err("Should be behind placeholder");
+
+        h_tree.push_history();
+
+        h_tree.get("Bob").expect_err("Should be behind placeholder");
+        h_tree.get("Charlie").expect_err("Should be behind placeholder");
+        h_tree.get("Vanessa").expect("Should be OK");
+        h_tree.get("Aaron").expect_err("Should be behind placeholder");
+    }
+
+    #[test]
+    fn push_history_3() {
+        let a = h2d!("6300000000000000000000000000000000000000000000000000000000000000");
+        let b = h2d!("6F00000000000000000000000000000000000000000000000000000000000000");
+        let c = h2d!("8000000000000000000000000000000000000000000000000000000000000000");
+
+        let mut v = vec!(
+            a,   // L,R,R,L,L,L,R,R
+            b,   // L,R,R,L,R,R,R,R
+            c,   // R
+        );
+
+        let is_close_a = get_is_close_fn(a, v.clone());
+        let is_close_b = get_is_close_fn(b, v.clone());
+        let is_close_c = get_is_close_fn(c, v.clone());
+
+        let mut h_tree_a = HistoryTree::new(1, is_close_a);
+        let mut h_tree_b = HistoryTree::new(1, is_close_b);
+        let mut h_tree_c = HistoryTree::new(1, is_close_c);
+    
+        let keys_existing = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M"];
+        for k in keys_existing.iter() {
+            h_tree_a.insert(*k, 42);
+            h_tree_b.insert(*k, 42);
+            h_tree_c.insert(*k, 42);
+        }
+
+        h_tree_a.push_history();
+        h_tree_a.push_history();
+        h_tree_b.push_history();
+        h_tree_b.push_history();
+        h_tree_c.push_history();
+        h_tree_c.push_history();
+
+        v.sort_by_key(|x| *x.as_ref());
+
+        let keys_searching = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"];
+        for k in keys_searching.iter() {
+            let d = closest(&v, drop::crypto::hash(k).unwrap().as_ref());
+
+            let res;
+            if d == &a {
+                res = h_tree_a.get_proof(k);
+            } else if d == &b {
+                res = h_tree_b.get_proof(k);
+            } else {
+                res = h_tree_c.get_proof(k);
+            }
+
+            res.expect("Should have been Ok!");
+        }
     }
 }

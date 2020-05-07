@@ -5,20 +5,14 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
 use std::convert::TryFrom;
 
+use super::util::{bit, set_bit, clear_bits_to_end};
+
 use drop::crypto::{self, Digest};
 use std::fmt;
 
 pub use crate::error::MerkleError::{
     self, KeyBehindPlaceholder, KeyNonExistant,
 };
-
-// bits: 0 -> most significant, 255 -> least significant
-#[inline]
-pub fn bit(arr: &[u8; 32], index: u8) -> bool {
-    let byte = arr[(index / 8) as usize];
-    let sub_index: u8 = 1 << (7 - (index % 8));
-    (byte & sub_index) > 0
-}
 
 macro_rules! h2d {
     ($data:expr) => {
@@ -183,34 +177,74 @@ where
             Node::Leaf(l) => l.get_internal(k),
         }
     }
-
-    /// Returns a vector with all digests (hashes) on the path to key k from the underlying tree.
-    /// 
-    /// The first element corresponds to the digest of the leaf with the key (or the placeholder it is behind),
-    /// moving up all the way to the digest of the tree root.
-    pub fn get_path_digests<Q: ?Sized>(&self, k: &Q, depth: u32) -> Vec<Digest>
+    
+    pub fn extend_knowledge<Q: ?Sized>(self, k: &Q, new_count: usize, other_root: &Node<K, V>, depth: u32) -> Option<Self>
     where
         K: Borrow<Q>,
         Q: Serialize + Eq,
     {
         let d = crypto::hash(&k).unwrap();
-        self.get_path_digests_internal(k, depth, &d)
+        self.extend_knowledge_internal(k, new_count, other_root, depth, &d)
     }
 
-    fn get_path_digests_internal<Q: ?Sized>(
-        &self,
+    fn extend_knowledge_internal<Q: ?Sized>(
+        self,
         k: &Q,
+        new_count: usize,
+        other_root: &Node<K, V>,
         depth: u32,
         k_digest: &Digest,
-    ) -> Vec<Digest>
+    ) -> Option<Self>
     where
         K: Borrow<Q>,
         Q: Serialize + Eq,
     {
         match self {
-            Node::Internal(i) => i.get_path_digests_internal(k, depth, k_digest),
-            Node::Placeholder(ph) => vec!(ph.hash()),
-            Node::Leaf(l) => vec!(l.hash()),
+            Node::Internal(i) => Some(i.extend_knowledge_internal(k, new_count, other_root, depth, k_digest).into()),
+            Node::Placeholder(ph) => match other_root.find_in_path(k, &ph.hash(), 0) {
+                Ok(Some(n)) => {
+                    let mut n = n.clone();
+                    n.set_count(new_count);
+                    Some(n)
+                }
+                Ok(None) => None,
+                Err(()) => panic!("Attempting to extend knowledge with an ignorant other_root"),
+            }
+            Node::Leaf(l) => Some(l.into()),
+        }
+    }
+
+    /// Returns the node in the path to the key with the same digest as the one provided (sd), if it exists
+    /// 
+    /// Ok(None) is returned if the provided digest is the default and the path leads to an empty leaf.
+    /// (None corresponds to the empty leaf)
+    pub fn find_in_path<Q: ?Sized>(&self, k: &Q, sd: &Digest, depth: u32) -> Result<Option<&Node<K, V>>, ()>
+    where
+        K: Borrow<Q>,
+        Q: Serialize + Eq,
+    {
+        let d = crypto::hash(&k).unwrap();
+        self.find_in_path_internal(k, sd, depth, &d)
+    }
+
+    fn find_in_path_internal<Q: ?Sized>(
+        &self,
+        k: &Q,
+        sd: &Digest,
+        depth: u32,
+        k_digest: &Digest,
+    ) -> Result<Option<&Node<K, V>>, ()>
+    where
+        K: Borrow<Q>,
+        Q: Serialize + Eq,
+    {
+        match self {
+            Node::Internal(i) if &i.hash() == sd => Ok(Some(&self)),
+            Node::Internal(i) => i.find_in_path_internal(k, sd, depth, k_digest),
+            Node::Placeholder(ph) if &ph.hash() == sd => Ok(Some(&self)),
+            Node::Placeholder(_) => Err(()),
+            Node::Leaf(l) if &l.hash() == sd => Ok(Some(&self)),
+            Node::Leaf(_) => Err(()),
         }
     }
 
@@ -223,9 +257,9 @@ where
     ///
     /// Behaviour is currently unspecified for the `Placeholder` variant,
     /// panicking with unimplemented!(...).
-    pub fn insert(self, k: K, v: V, depth: u32) -> (Option<V>, Self) {
+    pub fn insert(self, k: K, v: V, count: usize, depth: u32) -> (Option<V>, Self) {
         let d = crypto::hash(&k).unwrap();
-        self.insert_internal(k, v, depth, &d)
+        self.insert_internal(k, v, count, depth, &d)
     }
 
     /// Adds the key value (k, v) association to the underlying tree.
@@ -237,18 +271,19 @@ where
         self,
         k: K,
         v: V,
+        count: usize,
         depth: u32,
         k_digest: &Digest,
     ) -> (Option<V>, Self) {
         match self {
-            Node::Internal(n) => match n.insert_internal(k, v, depth, k_digest)
+            Node::Internal(n) => match n.insert_internal(k, v, count, depth, k_digest)
             {
                 (v @ _, n @ _) => (v, n.into()),
             },
             Node::Placeholder(_) => unimplemented!(
                 "Unspecified behaviour for 'insert' on placeholder"
             ),
-            Node::Leaf(n) => match n.insert_internal(k, v, depth, k_digest) {
+            Node::Leaf(n) => match n.insert_internal(k, v, count, depth, k_digest) {
                 (v @ _, n @ _) => (v, n.into()),
             },
         }
@@ -302,6 +337,45 @@ where
                 (v @ _, Some(l)) => (v, Some(l.into())),
                 (v @ _, None) => (v, None),
             },
+        }
+    }
+
+    pub fn replace_with_placeholder<Q: ?Sized, F>(
+        self,
+        k: &Q,
+        max_count: usize,
+        is_close: &F,
+        depth: u32,
+    ) -> Self
+    where
+        K: Borrow<Q>,
+        Q: Serialize + Eq,
+        F: Fn([u8; 32], usize) -> bool,
+    {
+        let d = crypto::hash(&k).unwrap();
+        self.replace_with_placeholder_internal(k, max_count, is_close, depth, &d)
+    }
+
+    fn replace_with_placeholder_internal<Q: ?Sized, F>(
+        self,
+        k: &Q,
+        max_count: usize,
+        is_close: &F,
+        depth: u32,
+        k_digest: &Digest,
+    ) -> Self
+    where
+        K: Borrow<Q>,
+        Q: Serialize + Eq,
+        F: Fn([u8; 32], usize) -> bool,
+    {
+        match self {
+            Node::Internal(i) => i.replace_with_placeholder_internal(k, max_count, is_close, depth, k_digest),
+            Node::Placeholder(_) => {
+                // panic!("Placeholder already found in path to key. Can only replace leaves with placeholder!")
+                self
+            }
+            Node::Leaf(l) => l.replace_with_placeholder_internal(k, max_count, is_close, depth, k_digest),
         }
     }
 
@@ -359,11 +433,19 @@ where
     }
 
     // Recursively counts the number of leaves
-    pub fn count(&self) -> usize {
+    pub fn len(&self) -> usize {
         match self {
-            Node::Internal(i) => i.count(),
+            Node::Internal(i) => i.len(),
             Node::Placeholder(_) => 0,
             Node::Leaf(_) => 1,
+        }
+    }
+
+    fn set_count(&mut self, new_count: usize) {
+        match self {
+            Node::Internal(i) => i.set_count(new_count),
+            Node::Placeholder(_) => (),
+            Node::Leaf(l) => l.set_count(new_count),
         }
     }
 
@@ -421,6 +503,9 @@ where
 {
     k: K,
     v: V,
+
+    #[serde(skip)]
+    count: usize,
 }
 
 impl<K, V> Hashable for Leaf<K, V>
@@ -438,8 +523,8 @@ where
     K: Serialize + Clone + Eq,
     V: Serialize + Clone,
 {
-    pub fn new(key: K, value: V) -> Self {
-        Leaf { k: key, v: value }
+    pub fn new(key: K, value: V, count: usize) -> Self {
+        Leaf { k: key, v: value, count: count }
     }
 
     pub fn key(&self) -> &K {
@@ -448,6 +533,10 @@ where
 
     pub fn value(&self) -> &V {
         &self.v
+    }
+
+    pub fn set_count(&mut self, new_count: usize) {
+        self.count = new_count;
     }
 
     fn get_internal<Q: ?Sized>(&self, k: &Q) -> Result<&V, MerkleError>
@@ -466,6 +555,7 @@ where
         mut self,
         k: K,
         v: V,
+        count: usize,
         depth: u32,
         k_digest: &Digest,
     ) -> (Option<V>, Node<K, V>) {
@@ -485,7 +575,7 @@ where
             Internal::new(Some(self.into()), None)
         };
 
-        match i.insert_internal(k, v, depth, k_digest) {
+        match i.insert_internal(k, v, count, depth, k_digest) {
             (v @ _, n @ _) => (v, n.into()),
         }
     }
@@ -499,6 +589,29 @@ where
             (Some(self.v), None)
         } else {
             (None, Some(self)) // consider refactoring (return an error)
+        }
+    }
+
+    fn replace_with_placeholder_internal<Q: ?Sized, F>(
+        self,
+        k: &Q,
+        max_count: usize,
+        is_close: F,
+        depth: u32,
+        k_digest: &Digest,
+    ) -> Node<K, V>
+    where
+        K: Borrow<Q>,
+        Q: Serialize + Eq,
+        F: Fn([u8; 32], usize) -> bool,
+    {
+        if self.k.borrow() != k {
+            // panic!("Attempting to replace non-existing key with placeholder");
+            self.into()
+        } else if self.count <= max_count && !is_close(*k_digest.as_ref(), depth as usize) {
+            Placeholder::from(self).into()
+        } else {
+            self.into()
         }
     }
 }
@@ -651,13 +764,45 @@ where
             None => Err(KeyNonExistant),
         }
     }
-    
-    fn get_path_digests_internal<Q: ?Sized>(
-        &self,
+
+    fn extend_knowledge_internal<Q: ?Sized>(
+        mut self,
         k: &Q,
+        new_count: usize,
+        other_root: &Node<K, V>,
         depth: u32,
         k_digest: &Digest,
-    ) -> Vec<Digest>
+    ) -> Self
+    where
+        K: Borrow<Q>,
+        Q: Serialize + Eq,
+    {
+        let side = if bit(k_digest.as_ref(), depth as u8) {
+            &mut self.right
+        } else {
+            &mut self.left
+        };
+
+        let r = match side.take() {
+            Some(n) => match n.extend_knowledge_internal(k, new_count, other_root, depth + 1, k_digest) {
+                Some(n) => Some(Box::new(n)),
+                None => None,
+            },
+            None => None,
+        };
+
+        *side = r;
+
+        self
+    }
+
+    fn find_in_path_internal<Q: ?Sized>(
+        &self,
+        k: &Q,
+        sd: &Digest,
+        depth: u32,
+        k_digest: &Digest,
+    ) -> Result<Option<&Node<K, V>>, ()>
     where
         K: Borrow<Q>,
         Q: Serialize + Eq,
@@ -669,12 +814,9 @@ where
         };
 
         match side {
-            Some(n) => { 
-                let mut v = n.as_ref().get_path_digests_internal(k, depth + 1, k_digest);
-                v.push(self.hash());
-                v
-            },
-            None => vec!(Placeholder::default().hash(), self.hash()),
+            Some(n) => n.as_ref().find_in_path_internal(k, sd, depth + 1, k_digest),
+            None if sd == &Placeholder::default().hash() => Ok(None),
+            None => Err(()),
         }
     }
 
@@ -682,6 +824,7 @@ where
         mut self,
         k: K,
         v: V,
+        count: usize,
         depth: u32,
         k_digest: &Digest,
     ) -> (Option<V>, Self) {
@@ -695,11 +838,11 @@ where
 
         match side.take() {
             None => {
-                *side = Some(Box::new(Leaf::new(k, v).into()));
+                *side = Some(Box::new(Leaf::new(k, v, count).into()));
                 self.update_digest();
                 (None, self)
             }
-            Some(n) => match n.insert_internal(k, v, depth + 1, k_digest) {
+            Some(n) => match n.insert_internal(k, v, count, depth + 1, k_digest) {
                 (o @ _, n @ _) => {
                     *side = Some(Box::new(n));
                     self.update_digest();
@@ -745,6 +888,68 @@ where
                     _ => {
                         self.update_digest();
                         (r.0, self.into())
+                    }
+                }
+            }
+        }
+    }
+
+    fn replace_with_placeholder_internal<Q: ?Sized, F>(
+        mut self,
+        k: &Q,
+        max_count: usize,
+        is_close: &F,
+        depth: u32,
+        k_digest: &Digest,
+    ) -> Node<K, V>
+    where
+        K: Borrow<Q>,
+        Q: Serialize + Eq,
+        F: Fn([u8; 32], usize) -> bool,
+    {
+        let side = if bit(k_digest.as_ref(), depth as u8) {
+            &mut self.right
+        } else {
+            &mut self.left
+        };
+
+        match side.take() {
+            None => {
+                // panic!("Attempting to replace non-existing key with placeholder")
+                self.into()
+            }
+            Some(n) => {
+                let r = n.replace_with_placeholder_internal(k, max_count, is_close, depth + 1, k_digest);
+                *side = Some(Box::new(r));
+
+                match (&self.left, &self.right) {
+                    (None, None) => unreachable!(),
+                    (Some(a), Some(b)) if a.is_placeholder() && b.is_placeholder() => {
+                        Placeholder::from(self).into()
+                    }
+                    (Some(a), None) if a.is_placeholder() => {
+                        let mut fake = k_digest.as_ref().clone();
+                        clear_bits_to_end(&mut fake, depth as u8);
+                        set_bit(&mut fake, depth as u8, true);
+
+                        if !is_close(fake, depth as usize) {
+                            Placeholder::from(self).into()
+                        } else {
+                            self.into()
+                        }
+                    }
+                    (None, Some(b)) if b.is_placeholder() => {
+                        let mut fake = k_digest.as_ref().clone();
+                        clear_bits_to_end(&mut fake, depth as u8);
+
+                        if !is_close(fake, depth as usize) {
+                            Placeholder::from(self).into()
+                        } else {
+                            self.into()
+                        }
+                    }
+                    _ => {
+                        self.into()
                     }
                 }
             }
@@ -815,18 +1020,30 @@ where
         }
     }
 
-    fn count(&self) -> usize {
-        let l_count = match &self.left {
+    fn len(&self) -> usize {
+        let l_len = match &self.left {
             None => 0,
-            Some(n) => n.count(),
+            Some(n) => n.len(),
         };
 
-        let r_count = match &self.right {
+        let r_len = match &self.right {
             None => 0,
-            Some(n) => n.count(),
+            Some(n) => n.len(),
         };
 
-        l_count + r_count
+        l_len + r_len
+    }
+
+    fn set_count(&mut self, new_count: usize) {
+        match &mut self.left {
+            None => (),
+            Some(n) => n.set_count(new_count),
+        };
+
+        match &mut self.right {
+            None => (),
+            Some(n) => n.set_count(new_count),
+        };
     }
 }
 
@@ -899,7 +1116,7 @@ where
     fn from(n: Node<K, V>) -> Self {
         match n {
             Node::Placeholder(n) => n,
-            a => a.into(),
+            a => Placeholder::new(a.hash()),
         }
     }
 }
@@ -1024,32 +1241,20 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_bit() {
-        let u = &mut [0 as u8; 32];
-        u[0] = 0x88;
-        u[1] = 0x55;
-
-        assert_eq!(bit(u, 0), true);
-        assert_eq!(bit(u, 1), false);
-        assert_eq!(bit(u, 8), false);
-        assert_eq!(bit(u, 9), true);
-    }
-
+    use super::super::util::{get_is_close_fn};
     // CONSTRUCTOR TESTS
 
     #[test]
     fn leaf_constructor() {
-        let l = Leaf::new("Test", 3);
+        let l = Leaf::new("Test", 3, 0);
         assert_eq!(l.k, "Test");
         assert_eq!(l.v, 3);
     }
 
     #[test]
     fn internal_constructor1() {
-        let left_r = Leaf::new("left", 0x00).into();
-        let right_r = Leaf::new("right", 0x01).into();
+        let left_r = Leaf::new("left", 0x00, 0).into();
+        let right_r = Leaf::new("right", 0x01, 0).into();
         let i = Internal::new(Some(left_r), Some(right_r));
 
         match (i.left.unwrap().as_ref(), i.right.unwrap().as_ref()) {
@@ -1065,8 +1270,8 @@ mod tests {
 
     #[test]
     fn internal_constructor2() {
-        let left_r = Leaf::new("left", 0x00).into();
-        let right_r = Leaf::new("right", 0x01).into();
+        let left_r = Leaf::new("left", 0x00, 0).into();
+        let right_r = Leaf::new("right", 0x01, 0).into();
         let i1 = Internal::new(Some(left_r), Some(right_r));
         let i2 = Internal::new(Some(i1.into()), None);
 
@@ -1089,7 +1294,7 @@ mod tests {
 
     #[test]
     fn placeholder_from_leaf() {
-        let base = Leaf::new("", 0x00);
+        let base = Leaf::new("", 0x00, 0);
         let hash = base.hash();
 
         let ph: Placeholder = base.into();
@@ -1098,7 +1303,7 @@ mod tests {
 
     #[test]
     fn placeholder_from_internal() {
-        let base = Leaf::new("", 0x00);
+        let base = Leaf::new("", 0x00, 0);
         let i = Internal::new(None, Some(base.into()));
         let hash = i.hash();
 
@@ -1110,29 +1315,29 @@ mod tests {
 
     #[test]
     fn leaf_hash() {
-        let base = Leaf::new("", 0x00);
+        let base = Leaf::new("", 0x00, 0);
 
-        let r1 = Leaf::new("", 0x01);
+        let r1 = Leaf::new("", 0x01, 0);
         assert_ne!(base.hash(), r1.hash());
 
-        let r2 = Leaf::new("", 0x00);
+        let r2 = Leaf::new("", 0x00, 0);
         assert_eq!(base.hash(), r2.hash());
 
         let v: [u8; 0] = [];
-        let r3 = Leaf::new("", v);
+        let r3 = Leaf::new("", v, 0);
         assert_ne!(base.hash(), r3.hash());
     }
 
     #[test]
     fn internal_hash_correctness1() {
-        let left_r = Leaf::new("left", 0x00).into();
-        let right_r = Leaf::new("right", 0x01).into();
+        let left_r = Leaf::new("left", 0x00, 0).into();
+        let right_r = Leaf::new("right", 0x01, 0).into();
         let i = Internal::new(Some(left_r), Some(right_r));
         let h1 = i.hash();
         let p1 = Internal::new(Some(i.into()), None);
 
-        let left_r = Leaf::new("left", 0x00).into();
-        let right_r = Leaf::new("right", 0x01).into();
+        let left_r = Leaf::new("left", 0x00, 0).into();
+        let right_r = Leaf::new("right", 0x01, 0).into();
         let i = Internal::new(Some(left_r), Some(right_r));
         let h2 = i.hash();
         let p2 = Internal::new(Some(i.into()), None);
@@ -1159,7 +1364,7 @@ mod tests {
 
     #[test]
     fn leaf_get_normal() {
-        let base = Leaf::new("Alice", 0x00);
+        let base = Leaf::new("Alice", 0x00, 0);
 
         let v = base.get_internal("Alice").unwrap();
         assert_eq!(*v, 0x00);
@@ -1168,7 +1373,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "KeyNonExistant")]
     fn leaf_get_err_non_existant() {
-        let base = Leaf::new("Alice", 0x00);
+        let base = Leaf::new("Alice", 0x00, 0);
 
         base.get_internal("Bob").unwrap();
     }
@@ -1176,8 +1381,8 @@ mod tests {
     #[test]
     fn internal_get_normal() {
         let i: Node<_, _> = Internal::new(None, None).into();
-        let (_, i) = i.insert("Alice", 0x01, 0);
-        let (_, i) = i.insert("Bob", 0x02, 0);
+        let (_, i) = i.insert("Alice", 0x01, 0, 0);
+        let (_, i) = i.insert("Bob", 0x02, 0, 0);
 
         let v = i.get("Alice", 0).unwrap();
         assert_eq!(*v, 0x01);
@@ -1190,8 +1395,8 @@ mod tests {
     #[should_panic(expected = "KeyNonExistant")]
     fn internal_get_err_non_existant() {
         let i: Node<_, _> = Internal::new(None, None).into();
-        let (_, i) = i.insert("Alice", 0x01, 0);
-        let (_, i) = i.insert("Bob", 0x02, 0);
+        let (_, i) = i.insert("Alice", 0x01, 0, 0);
+        let (_, i) = i.insert("Bob", 0x02, 0, 0);
 
         i.get("Charlie", 0).unwrap();
     }
@@ -1200,9 +1405,9 @@ mod tests {
     #[should_panic(expected = "KeyBehindPlaceholder")]
     fn internal_get_err_behind_placeholder() {
         let i: Node<_, _> = Internal::new(None, None).into();
-        let (_, i) = i.insert("Bob", 0x01, 0); // left
-        let (_, i) = i.insert("Aaron", 0x02, 0); // right, left
-        let mut i = i.insert("Dave", 0x03, 0).1.internal(); // right, right
+        let (_, i) = i.insert("Bob", 0x01, 0, 0); // left
+        let (_, i) = i.insert("Aaron", 0x02, 0, 0); // right, left
+        let mut i = i.insert("Dave", 0x03, 0, 0).1.internal(); // right, right
 
         let ph: Placeholder = i.right().unwrap().into();
         i.right = Some(Box::new(ph.into()));
@@ -1230,7 +1435,7 @@ mod tests {
             h2d!("c8c3fff091d468a9c3d758eb79f31b0e9cef2718681b81ec693d0990a639962f")
         );
 
-        let leaf = Leaf::new(leaf_k, 0x00);
+        let leaf = Leaf::new(leaf_k, 0x00, 0);
 
         let k = "Bob";
         let digest = crypto::hash(&k).unwrap();
@@ -1243,7 +1448,7 @@ mod tests {
         assert_eq!(bit(leaf_d.as_ref(), 0), true);
 
         let depth = 0;
-        let i = leaf.insert_internal(k, 0x01, depth, &digest).1.internal();
+        let i = leaf.insert_internal(k, 0x01, 0, depth, &digest).1.internal();
 
         if let Node::Leaf(l) = i.left().expect("missing left node") {
             assert_eq!(l.k, "Bob");
@@ -1276,7 +1481,7 @@ mod tests {
             h2d!("c8c3fff091d468a9c3d758eb79f31b0e9cef2718681b81ec693d0990a639962f")
         );
 
-        let leaf = Leaf::new(leaf_k, 0x00);
+        let leaf = Leaf::new(leaf_k, 0x00, 0);
 
         let k = "Aaron";
         let digest = crypto::hash(&k).unwrap();
@@ -1286,7 +1491,7 @@ mod tests {
         );
 
         let depth = 0;
-        let i = leaf.insert_internal(k, 0x01, depth, &digest).1.internal();
+        let i = leaf.insert_internal(k, 0x01, 0, depth, &digest).1.internal();
 
         if let Some(_) = i.left() {
             panic!("left of depth 0 internal node should be empty");
@@ -1319,14 +1524,14 @@ mod tests {
     fn leaf_insert_existing_key() {
         let leaf_k = "left";
 
-        let leaf = Leaf::new(leaf_k, 0x01);
+        let leaf = Leaf::new(leaf_k, 0x01, 0);
         let digest = crypto::hash(&leaf_k).unwrap();
 
-        let (v, i) = leaf.insert_internal(leaf_k, 0x02, 0, &digest);
+        let (v, i) = leaf.insert_internal(leaf_k, 0x02, 0, 0, &digest);
         assert_eq!(v, Some(0x01));
-        let (v, i) = i.insert_internal(leaf_k, 0x03, 0, &digest);
+        let (v, i) = i.insert_internal(leaf_k, 0x03, 0, 0, &digest);
         assert_eq!(v, Some(0x02));
-        let (v, _) = i.insert("aaron", 0x03, 0);
+        let (v, _) = i.insert("aaron", 0x03, 0, 0);
         assert_eq!(v, None);
     }
 
@@ -1345,7 +1550,7 @@ mod tests {
             h2d!("c8c3fff091d468a9c3d758eb79f31b0e9cef2718681b81ec693d0990a639962f")
         );
 
-        let leaf = Leaf::new(leaf_k, 0x00);
+        let leaf = Leaf::new(leaf_k, 0x00, 0);
 
         let k = "Bob";
         let digest = crypto::hash(&k).unwrap();
@@ -1356,7 +1561,7 @@ mod tests {
 
         let depth = 0;
         let i: Node<_, _> = Internal::new(None, Some(leaf.into())).into();
-        let i = i.insert(k, 0x01, depth).1.internal();
+        let i = i.insert(k, 0x01, 0, depth).1.internal();
 
         if let Node::Leaf(l) = i.left().expect("missing left node") {
             assert_eq!(l.k, "Bob");
@@ -1390,7 +1595,7 @@ mod tests {
             h2d!("c8c3fff091d468a9c3d758eb79f31b0e9cef2718681b81ec693d0990a639962f")
         );
 
-        let leaf = Leaf::new(leaf_k, 0x00);
+        let leaf = Leaf::new(leaf_k, 0x00, 0);
 
         let k = "Aaron";
         let digest = crypto::hash(&k).unwrap();
@@ -1401,7 +1606,7 @@ mod tests {
 
         let depth = 0;
         let i: Node<_, _> = Internal::new(None, Some(leaf.into())).into();
-        let i = i.insert(k, 0x01, depth).1.internal();
+        let i = i.insert(k, 0x01, 0, depth).1.internal();
 
         if let Some(Node::Internal(i)) = i.right() {
             if let Node::Leaf(l) = i
@@ -1428,16 +1633,16 @@ mod tests {
 
     #[test]
     fn internal_insert_existing_key() {
-        let i: Node<_, _> = Leaf::new("left", 0x01).into();
-        let (_, i) = i.insert("right", 0x02, 0);
+        let i: Node<_, _> = Leaf::new("left", 0x01, 0).into();
+        let (_, i) = i.insert("right", 0x02, 0, 0);
 
-        let (v, i) = i.insert("right", 0x03, 0);
+        let (v, i) = i.insert("right", 0x03, 0, 0);
         assert_eq!(v, Some(0x02));
 
-        let (v, i) = i.insert("left", 0x04, 0);
+        let (v, i) = i.insert("left", 0x04, 0, 0);
         assert_eq!(v, Some(0x01));
 
-        let (v, _) = i.insert("aaron", 0x03, 0);
+        let (v, _) = i.insert("aaron", 0x03, 0, 0);
         assert_eq!(v, None);
     }
 
@@ -1445,7 +1650,7 @@ mod tests {
 
     #[test]
     fn leaf_remove_normal() {
-        let l: Node<_, _> = Leaf::new("Alice", 0x01).into();
+        let l: Node<_, _> = Leaf::new("Alice", 0x01, 0).into();
         let v = l.remove("Alice", 0);
         assert_eq!(v.0, Some(0x01));
         if let Some(_) = v.1 {
@@ -1455,7 +1660,7 @@ mod tests {
 
     #[test]
     fn leaf_remove_non_existant() {
-        let l: Node<_, _> = Leaf::new("Alice", 0x01).into();
+        let l: Node<_, _> = Leaf::new("Alice", 0x01, 0).into();
         let v = l.remove("Bob", 0);
         let l = v.1.unwrap().leaf();
         assert_eq!(*l.key(), "Alice");
@@ -1470,8 +1675,8 @@ mod tests {
     #[test]
     fn internal_remove_normal1() {
         let i: Node<_, _> = Internal::new(None, None).into();
-        let (_, i) = i.insert("Bob", 0x01, 0); // left
-        let (_, i) = i.insert("Aaron", 0x02, 0); // right
+        let (_, i) = i.insert("Bob", 0x01, 0, 0); // left
+        let (_, i) = i.insert("Aaron", 0x02, 0, 0); // right
 
         let v = i.remove("Aaron", 0);
         assert_eq!(v.0, Some(0x02));
@@ -1489,9 +1694,9 @@ mod tests {
     #[test]
     fn internal_remove_normal2() {
         let i: Node<_, _> = Internal::new(None, None).into();
-        let (_, i) = i.insert("Bob", 0x01, 0); // left
-        let (_, i) = i.insert("Aaron", 0x02, 0); // right, left
-        let (_, i) = i.insert("Dave", 0x03, 0); // right, right
+        let (_, i) = i.insert("Bob", 0x01, 0, 0); // left
+        let (_, i) = i.insert("Aaron", 0x02, 0, 0); // right, left
+        let (_, i) = i.insert("Dave", 0x03, 0, 0); // right, right
 
         let v = i.remove("Dave", 0);
         assert_eq!(v.0, Some(0x03));
@@ -1516,8 +1721,8 @@ mod tests {
     #[test]
     fn internal_remove_normal3() {
         let i: Node<_, _> = Internal::new(None, None).into();
-        let (_, i) = i.insert("Bob", 0x02, 0); // L,R,R,L,L,L,R,R
-        let (_, i) = i.insert("Charlie", 0x03, 0); // L,R,R,L,L,L,R,L
+        let (_, i) = i.insert("Bob", 0x02, 0, 0); // L,R,R,L,L,L,R,R
+        let (_, i) = i.insert("Charlie", 0x03, 0, 0); // L,R,R,L,L,L,R,L
 
         let v = i.remove("Charlie", 0);
         assert_eq!(v.0, Some(0x03));
@@ -1535,9 +1740,9 @@ mod tests {
     #[test]
     fn internal_remove_normal4() {
         let i: Node<_, _> = Internal::new(None, None).into();
-        let (_, i) = i.insert("Aaron", 0x01, 0); // right
-        let (_, i) = i.insert("Bob", 0x02, 0); // L,R,R,L,L,L,R,R
-        let (_, i) = i.insert("Charlie", 0x03, 0); // L,R,R,L,L,L,R,L
+        let (_, i) = i.insert("Aaron", 0x01, 0, 0); // right
+        let (_, i) = i.insert("Bob", 0x02, 0, 0); // L,R,R,L,L,L,R,R
+        let (_, i) = i.insert("Charlie", 0x03, 0, 0); // L,R,R,L,L,L,R,L
 
         let v = i.remove("Charlie", 0);
         assert_eq!(v.0, Some(0x03));
@@ -1561,9 +1766,9 @@ mod tests {
     #[test]
     fn internal_remove_err() {
         let i: Node<_, _> = Internal::new(None, None).into();
-        let (_, i) = i.insert("Aaron", 0x01, 0); // right
-        let (_, i) = i.insert("Bob", 0x02, 0); // L,R,R,L,L,L,R,R
-        let (_, i) = i.insert("Charlie", 0x03, 0); // L,R,R,L,L,L,R,L
+        let (_, i) = i.insert("Aaron", 0x01, 0, 0); // right
+        let (_, i) = i.insert("Bob", 0x02, 0, 0); // L,R,R,L,L,L,R,R
+        let (_, i) = i.insert("Charlie", 0x03, 0, 0); // L,R,R,L,L,L,R,L
 
         let v = i.remove("Charlie", 0);
         assert_eq!(v.0, Some(0x03));
@@ -1588,8 +1793,8 @@ mod tests {
 
     #[test]
     fn ser_de() {
-        let i: Node<_, _> = Leaf::new("Bob", 0x02).into(); // L,R,R,L,L,L,R,R
-        let (_, i) = i.insert("Charlie", 0x03, 0); // L,R,R,L,L,L,R,L
+        let i: Node<_, _> = Leaf::new("Bob", 0x02, 0).into(); // L,R,R,L,L,L,R,R
+        let (_, i) = i.insert("Charlie", 0x03, 0, 0); // L,R,R,L,L,L,R,L
 
         extern crate bincode;
 
@@ -1603,8 +1808,8 @@ mod tests {
     #[test]
     #[should_panic(expected = "Cached digest is not updated!")]
     fn ser_de_err() {
-        let i: Node<_, _> = Leaf::new("Bob", 0x02).into(); // L,R,R,L,L,L,R,R
-        let (_, i) = i.insert("Charlie", 0x03, 0); // L,R,R,L,L,L,R,L
+        let i: Node<_, _> = Leaf::new("Bob", 0x02, 0).into(); // L,R,R,L,L,L,R,R
+        let (_, i) = i.insert("Charlie", 0x03, 0, 0); // L,R,R,L,L,L,R,L
 
         extern crate bincode;
 
@@ -1616,8 +1821,8 @@ mod tests {
 
     #[test]
     fn ser_de_update_cache_recursive() {
-        let i: Node<_, _> = Leaf::new("Bob", 0x02).into(); // L,R,R,L,L,L,R,R
-        let (_, i) = i.insert("Charlie", 0x03, 0); // L,R,R,L,L,L,R,L
+        let i: Node<_, _> = Leaf::new("Bob", 0x02, 0).into(); // L,R,R,L,L,L,R,R
+        let (_, i) = i.insert("Charlie", 0x03, 0, 0); // L,R,R,L,L,L,R,L
 
         extern crate bincode;
 
@@ -1632,7 +1837,7 @@ mod tests {
 
     #[test]
     fn leaf_get_proof_single() -> Result<(), MerkleError> {
-        let l = Leaf::new("Alice", 1);
+        let l = Leaf::new("Alice", 1, 0);
         let a = l.get_proof_single_internal("Alice")?;
 
         assert_eq!(*a.value(), 1);
@@ -1644,15 +1849,15 @@ mod tests {
     #[test]
     #[should_panic(expected = "KeyNonExistant")]
     fn leaf_get_proof_single_err() {
-        let l = Leaf::new("Alice", 1);
+        let l = Leaf::new("Alice", 1, 0);
         let p: Node<_, _> = l.get_proof_single_internal("Bob").unwrap().into();
         p.get("Bob", 0).unwrap();
     }
 
     #[test]
     fn internal_get_proof_single1() {
-        let l: Node<_, _> = Leaf::new("Bob", 1).into(); //left
-        let (_, i) = l.insert("Aaron", 2, 0); //right
+        let l: Node<_, _> = Leaf::new("Bob", 1, 0).into(); //left
+        let (_, i) = l.insert("Aaron", 2, 0, 0); //right
 
         let h = crypto::hash(&"Aaron").unwrap();
         let proof = i
@@ -1660,17 +1865,17 @@ mod tests {
             .unwrap()
             .internal();
 
-        let ph: Placeholder = Leaf::new("Bob", 1).into();
+        let ph: Placeholder = Leaf::new("Bob", 1, 0).into();
 
         assert_eq!(*proof.left().unwrap().placeholder_ref(), ph);
-        assert_eq!(*proof.right().unwrap().leaf_ref(), Leaf::new("Aaron", 2));
+        assert_eq!(*proof.right().unwrap().leaf_ref(), Leaf::new("Aaron", 2, 0));
     }
 
     #[test]
     fn internal_get_proof_single2() {
-        let l: Node<_, _> = Leaf::new("Bob", 0x01).into(); //left
-        let (_, i) = l.insert("Aaron", 0x02, 0); //right, left
-        let (_, i) = i.insert("Dave", 0x03, 0); // right, right
+        let l: Node<_, _> = Leaf::new("Bob", 0x01, 0).into(); //left
+        let (_, i) = l.insert("Aaron", 0x02, 0, 0); //right, left
+        let (_, i) = i.insert("Dave", 0x03, 0, 0); // right, right
 
         let h = crypto::hash(&"Dave").unwrap();
         let proof = i
@@ -1678,21 +1883,21 @@ mod tests {
             .unwrap()
             .internal();
 
-        let ph_bob: Placeholder = Leaf::new("Bob", 0x01).into();
-        let ph_aar: Placeholder = Leaf::new("Aaron", 0x02).into();
+        let ph_bob: Placeholder = Leaf::new("Bob", 0x01, 0).into();
+        let ph_aar: Placeholder = Leaf::new("Aaron", 0x02, 0).into();
 
         let r1 = proof.right().unwrap().internal_ref();
 
         assert_eq!(*proof.left().unwrap().placeholder_ref(), ph_bob);
         assert_eq!(*r1.left().unwrap().placeholder_ref(), ph_aar);
-        assert_eq!(*r1.right().unwrap().leaf_ref(), Leaf::new("Dave", 0x03));
+        assert_eq!(*r1.right().unwrap().leaf_ref(), Leaf::new("Dave", 0x03, 0));
     }
 
     #[test]
     fn internal_get_proof_single3() {
-        let l: Node<_, _> = Leaf::new("Bob", 0x01).into(); // L,R,R,L,L,L,R,R
-        let (_, i) = l.insert("Charlie", 0x03, 0); // L,R,R,L,L,L,R,L
-        let (_, i) = i.insert("Aaron", 0x02, 0); // right (R)
+        let l: Node<_, _> = Leaf::new("Bob", 0x01, 0).into(); // L,R,R,L,L,L,R,R
+        let (_, i) = l.insert("Charlie", 0x03, 0, 0); // L,R,R,L,L,L,R,L
+        let (_, i) = i.insert("Aaron", 0x02, 0, 0); // right (R)
 
         let h = crypto::hash(&"Charlie").unwrap();
         let proof = i
@@ -1700,8 +1905,8 @@ mod tests {
             .unwrap()
             .internal();
 
-        let ph_bob: Placeholder = Leaf::new("Bob", 0x01).into();
-        let ph_aar: Placeholder = Leaf::new("Aaron", 0x02).into();
+        let ph_bob: Placeholder = Leaf::new("Bob", 0x01, 0).into();
+        let ph_aar: Placeholder = Leaf::new("Aaron", 0x02, 0).into();
         let ph_def: Placeholder = Placeholder::default();
 
         let d1 = proof.left().unwrap().internal_ref();
@@ -1720,14 +1925,14 @@ mod tests {
         assert_eq!(*d5.right().unwrap().placeholder_ref(), ph_def);
         assert_eq!(*d6.left().unwrap().placeholder_ref(), ph_def);
         assert_eq!(*d7.right().unwrap().placeholder_ref(), ph_bob);
-        assert_eq!(*d7.left().unwrap().leaf_ref(), Leaf::new("Charlie", 0x03));
+        assert_eq!(*d7.left().unwrap().leaf_ref(), Leaf::new("Charlie", 0x03, 0));
     }
 
     #[test]
     #[should_panic(expected = "KeyNonExistant")]
     fn internal_get_proof_single_err() {
-        let i: Node<_, _> = Leaf::new("Bob", 0x01).into(); // left (L)
-        let (_, i) = i.insert("Aaron", 0x02, 0); // right (R)
+        let i: Node<_, _> = Leaf::new("Bob", 0x01, 0).into(); // left (L)
+        let (_, i) = i.insert("Aaron", 0x02, 0, 0); // right (R)
 
         let p = i.get_proof_single("Charlie", 0);
         if let Err(_) = p {
@@ -1741,11 +1946,11 @@ mod tests {
 
     #[test]
     fn leaf_merge() {
-        let mut l: Node<_, _> = Leaf::new("Alice", 3).into();
+        let mut l: Node<_, _> = Leaf::new("Alice", 3, 0).into();
         let l2 = l.clone();
 
         l.merge_unchecked(&l2);
-        assert_eq!(l.leaf(), Leaf::new("Alice", 3));
+        assert_eq!(l.leaf(), Leaf::new("Alice", 3, 0));
     }
 
     macro_rules! assert_behind_ph {
@@ -1759,9 +1964,9 @@ mod tests {
 
     #[test]
     fn internal_merge() {
-        let l: Node<_, _> = Leaf::new("Bob", 0x01).into(); // L,R,R,L,L,L,R,R
-        let (_, i) = l.insert("Charlie", 0x03, 0); // L,R,R,L,L,L,R,L
-        let (_, i) = i.insert("Aaron", 0x02, 0); // right (R)
+        let l: Node<_, _> = Leaf::new("Bob", 0x01, 0).into(); // L,R,R,L,L,L,R,R
+        let (_, i) = l.insert("Charlie", 0x03, 0, 0); // L,R,R,L,L,L,R,L
+        let (_, i) = i.insert("Aaron", 0x02, 0, 0); // right (R)
 
         let mut proof = i.get_proof_single("Charlie", 0).unwrap();
         assert_eq!(proof.get("Charlie", 0), Ok(&0x03));
@@ -1775,19 +1980,229 @@ mod tests {
     }
 
     #[test]
-    fn node_get_path_digests() {
-        let l: Node<_, _> = Leaf::new("Bob", 0x01).into(); // L,R,R,L,L,L,R,R
-        let (_, i) = l.insert("Charlie", 0x03, 0); // L,R,R,L,L,L,R,L
-        let (_, i) = i.insert("Aaron", 0x02, 0); // right (R)
+    fn node_find_in_path() {
+        let l: Node<_, _> = Leaf::new("Bob", 0x01, 0).into(); // L,R,R,L,L,L,R,R
+        let (_, i) = l.insert("Charlie", 0x03, 0, 0); // L,R,R,L,L,L,R,L
+        let (_, i) = i.insert("Aaron", 0x02, 0, 0); // right (R)
 
-        let v1 = i.get_path_digests("Charlie", 0);
-        let v2 = i.get_path_digests("Bob", 0);
-        let v3 = i.get_path_digests("Aaron", 0);
+        let proof = i.get_proof_single("Charlie", 0).unwrap();
 
-        assert_eq!(v1.len(), 9);
-        assert_eq!(v2.len(), 9);
-        assert_eq!(v3.len(), 2);
-        assert_eq!(v1[1..], v2[1..]);
-        assert_eq!(v1[8], v3[1]);
+        let d1 = match proof.get("Aaron", 0).unwrap_err() {
+            MerkleError::KeyBehindPlaceholder(d) => d,
+            _ => panic!("Aaron should be behind placeholder"),
+        };
+        let d2 = match proof.get("Bob", 0).unwrap_err() {
+            MerkleError::KeyBehindPlaceholder(d) => d,
+            _ => panic!("Bob should be behind placeholder"),
+        };
+
+        match i.find_in_path("Aaron", &d1, 0) {
+            Ok(Some(n)) if n.hash() != d1 => panic!("Hash of node found does not match digest"),
+            Ok(Some(_)) => (),
+            _ => panic!("Should have found digest in path to Aaron")
+        }
+        match i.find_in_path("Bob", &d2, 0) {
+            Ok(Some(n)) if n.hash() != d2 => panic!("Hash of node found does not match digest"),
+            Ok(Some(_)) => (),
+            _ => panic!("Should have found digest in path to Bob")
+        }
+    }
+
+    // Replace with placeholder
+
+    #[test]
+    fn node_replace_with_placeholder_1() {
+        let me = h2d!("0000000000000000000000000000000000000000000000000000000000000000");
+
+        let v = vec!(
+            h2d!("0000000000000000000000000000000000000000000000000000000000000000"),   // L, L
+            h2d!("4000000000000000000000000000000000000000000000000000000000000000"),   // L, R
+            h2d!("8000000000000000000000000000000000000000000000000000000000000000"),   // R
+        );
+
+        let is_close = get_is_close_fn(me, v);
+
+        let l: Node<_, _> = Leaf::new("Alice", 0x01, 0).into(); // L,L
+        let (_, i) = l.insert("Bob", 0x02, 0, 0); // L,R
+        let (_, i) = i.insert("Aaron", 0x03, 0, 0); // R
+
+        let i = i.replace_with_placeholder("Bob", 1, &is_close, 0);
+        let i = i.replace_with_placeholder("Aaron", 1, &is_close, 0);
+        let i = i.replace_with_placeholder("Alice", 1, &is_close, 0).internal(); // (should not replace)
+
+        let ph_bob: Placeholder = Leaf::new("Bob", 0x02, 0).into();
+        let ph_aar: Placeholder = Leaf::new("Aaron", 0x03, 0).into();
+
+        let d1 = i.left().unwrap().internal_ref();
+
+        assert_eq!(*i.right().unwrap().placeholder_ref(), ph_aar);
+        assert_eq!(*d1.right().unwrap().placeholder_ref(), ph_bob);
+        assert_eq!(d1.left().unwrap().leaf_ref(), &Leaf::new("Alice", 0x01, 0));
+    }
+
+    #[test]
+    fn node_replace_with_placeholder_2() {
+        let me = h2d!("6F00000000000000000000000000000000000000000000000000000000000000");
+
+        let v = vec!(
+            h2d!("6300000000000000000000000000000000000000000000000000000000000000"),   // L,R,R,L,L,L,R,R
+            h2d!("6F00000000000000000000000000000000000000000000000000000000000000"),   // L,R,R,L,R,R,R,R
+            h2d!("8000000000000000000000000000000000000000000000000000000000000000"),   // R
+        );
+
+        let is_close = get_is_close_fn(me, v);
+
+        let l: Node<_, _> = Leaf::new("Bob", 0x01, 0).into(); // L,R,R,L,L,L,R,R
+        let (_, i) = l.insert("Charlie", 0x02, 0, 0); // L,R,R,L,L,L,R,L
+        let (_, i) = i.insert("Aaron", 0x03, 0, 0); // right (R)
+
+        // Get expected placeholder
+        let d1 = i.internal_ref().left().unwrap().internal_ref();
+        let d2 = d1.right().unwrap().internal_ref();
+        let d3 = d2.right().unwrap().internal_ref();
+        let d4 = d3.left().unwrap().internal_ref();
+        let ph_aar: Placeholder = d4.left().unwrap().internal_ref().clone().into();
+
+        let i = i.replace_with_placeholder("Bob", 1, &is_close, 0);
+        let i = i.replace_with_placeholder("Charlie", 1, &is_close, 0).internal();
+
+        let d1 = i.left().unwrap().internal_ref();
+        let d2 = d1.right().unwrap().internal_ref();
+        let d3 = d2.right().unwrap().internal_ref();
+        let d4 = d3.left().unwrap().internal_ref();
+
+        assert_eq!(i.right().unwrap().leaf_ref(), &Leaf::new("Aaron", 0x03, 0));
+        assert_eq!(d1.left(), None);
+        assert_eq!(d2.left(), None);
+        assert_eq!(d3.right(), None);
+        assert_eq!(d4.right(), None);
+        assert_eq!(d4.left().unwrap().placeholder_ref(), &ph_aar);
+    }
+
+    #[test]
+    fn node_replace_with_placeholder_3() {
+        let me = h2d!("0000000000000000000000000000000000000000000000000000000000000000");
+
+        let v = vec!(
+            h2d!("0000000000000000000000000000000000000000000000000000000000000000"),   // L
+            h2d!("8000000000000000000000000000000000000000000000000000000000000000"),   // R, L
+            h2d!("c000000000000000000000000000000000000000000000000000000000000000"),   // R, R
+        );
+
+        let is_close = get_is_close_fn(me, v);
+
+        let l: Node<_, _> = Leaf::new("Bob", 0x01, 0).into(); //left
+        let (_, i) = l.insert("Aaron", 0x02, 0, 0); //right, left
+        let (_, i) = i.insert("Dave", 0x03, 0, 0); // right, right
+        
+        let i = i.replace_with_placeholder("Dave", 1, &is_close, 0);
+        let i = i.replace_with_placeholder("Aaron", 1, &is_close, 0).internal();
+
+        let i2 = Internal::new(Some(Leaf::new("Aaron", 0x02, 0).into()), Some(Leaf::new("Dave", 0x03, 0).into()));
+        let ph_aaron_dave: Placeholder = i2.into();
+
+        assert_eq!(*i.left().unwrap().leaf_ref(), Leaf::new("Bob", 0x01, 0));
+        assert_eq!(*i.right().unwrap().placeholder_ref(), ph_aaron_dave);
+    }
+
+    // Set count
+
+    #[test]
+    fn node_set_count() {
+        let l: Node<_, _> = Leaf::new("Bob", 0x01, 0).into(); //left
+        let (_, i) = l.insert("Aaron", 0x02, 0, 0); //right, left
+        let mut i = i.internal();
+
+        i.set_count(5);
+        assert_eq!(i.left().unwrap().leaf_ref(), &Leaf::new("Bob", 0x01, 5));
+        assert_eq!(i.right().unwrap().leaf_ref(), &Leaf::new("Aaron", 0x02, 5));
+
+        let i: Node<_, _> = i.into();
+        let (_, i) = i.insert("Dave", 0x03, 10, 0); //right, right
+        let i = i.internal_ref();
+
+        let d1 = i.right().unwrap().internal_ref();
+
+        assert_eq!(i.left().unwrap().leaf_ref(), &Leaf::new("Bob", 0x01, 5));
+        assert_eq!(d1.left().unwrap().leaf_ref(), &Leaf::new("Aaron", 0x02, 5));
+        assert_eq!(d1.right().unwrap().leaf_ref(), &Leaf::new("Dave", 0x03, 10));
+    }
+
+    // Extend knowledge
+
+    #[test]
+    fn node_extend_knowledge_1() {
+        let l: Node<_, _> = Leaf::new("Bob", 0x01, 0).into(); // L,R,R,L,L,L,R,R
+        let (_, i) = l.insert("Charlie", 0x03, 0, 0); // L,R,R,L,L,L,R,L
+        let (_, i) = i.insert("Aaron", 0x02, 0, 0); // right (R)
+
+        let pseudo_proof = i.clone();
+
+        let i = i.replace_with_placeholder("Bob", 1, &|_,_| false, 0);
+        let i = i.replace_with_placeholder("Aaron", 1, &|_,_| false, 0);
+
+        let i = i.extend_knowledge("Bob", 5, &pseudo_proof, 0).unwrap();
+        let i = i.extend_knowledge("Aaron", 5, &pseudo_proof, 0).unwrap().internal();
+
+        let d1 = i.left().unwrap().internal_ref();
+        let d2 = d1.right().unwrap().internal_ref();
+        let d3 = d2.right().unwrap().internal_ref();
+        let d4 = d3.left().unwrap().internal_ref();
+        let d5 = d4.left().unwrap().internal_ref();
+        let d6 = d5.left().unwrap().internal_ref();
+        let d7 = d6.right().unwrap().internal_ref();
+
+        assert_eq!(i.right().unwrap().leaf_ref(), &Leaf::new("Aaron", 0x02, 5));
+        assert_eq!(d1.left(), None);
+        assert_eq!(d2.left(), None);
+        assert_eq!(d3.right(), None);
+        assert_eq!(d4.right(), None);
+        assert_eq!(d5.right(), None);
+        assert_eq!(d6.left(), None);
+        assert_eq!(d7.right().unwrap().leaf_ref(), &Leaf::new("Bob", 0x01, 5));
+        assert_eq!(d7.left().unwrap().leaf_ref(), &Leaf::new("Charlie", 0x03, 0));
+    }
+
+    #[test]
+    fn node_extend_knowledge_2() {
+        let me = h2d!("6F00000000000000000000000000000000000000000000000000000000000000");
+
+        let v = vec!(
+            h2d!("6300000000000000000000000000000000000000000000000000000000000000"),   // L,R,R,L,L,L,R,R
+            h2d!("6F00000000000000000000000000000000000000000000000000000000000000"),   // L,R,R,L,R,R,R,R
+            h2d!("8000000000000000000000000000000000000000000000000000000000000000"),   // R
+        );
+
+        let is_close = get_is_close_fn(me, v);
+
+        let l: Node<_, _> = Leaf::new("Bob", 0x01, 0).into(); // L,R,R,L,L,L,R,R
+        let (_, i) = l.insert("Charlie", 0x02, 0, 0); // L,R,R,L,L,L,R,L
+        let (_, i) = i.insert("Aaron", 0x03, 0, 0); // right (R)
+
+        let pseudo_proof = i.clone();
+
+        let i = i.replace_with_placeholder("Bob", 1, &is_close, 0);
+        let i = i.replace_with_placeholder("Charlie", 1, &is_close, 0);
+
+        let i = i.extend_knowledge("Bob", 5, &pseudo_proof, 0).unwrap();
+        let i = i.extend_knowledge("Charlie", 5, &pseudo_proof, 0).unwrap().internal();
+
+        let d1 = i.left().unwrap().internal_ref();
+        let d2 = d1.right().unwrap().internal_ref();
+        let d3 = d2.right().unwrap().internal_ref();
+        let d4 = d3.left().unwrap().internal_ref();
+        let d5 = d4.left().unwrap().internal_ref();
+        let d6 = d5.left().unwrap().internal_ref();
+        let d7 = d6.right().unwrap().internal_ref();
+
+        assert_eq!(i.right().unwrap().leaf_ref(), &Leaf::new("Aaron", 0x03, 0));
+        assert_eq!(d1.left(), None);
+        assert_eq!(d2.left(), None);
+        assert_eq!(d3.right(), None);
+        assert_eq!(d4.right(), None);
+        assert_eq!(d5.right(), None);
+        assert_eq!(d6.left(), None);
+        assert_eq!(d7.right().unwrap().leaf_ref(), &Leaf::new("Bob", 0x01, 5));
+        assert_eq!(d7.left().unwrap().leaf_ref(), &Leaf::new("Charlie", 0x02, 5));
     }
 }

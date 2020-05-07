@@ -295,10 +295,10 @@ where
     pub fn insert(&mut self, k: K, v: V) -> Option<V> {
         match self.root.take() {
             None => {
-                self.root = Some(Leaf::new(k, v).into());
+                self.root = Some(Leaf::new(k, v, 0).into());
                 None
             }
-            Some(n) => match n.insert(k, v, 0) {
+            Some(n) => match n.insert(k, v, 0, 0) {
                 (v @ _, n @ _) => {
                     self.root = Some(n);
                     v
@@ -622,22 +622,69 @@ where
     pub fn len(&self) -> usize {
         match &self.root {
             None => 0,
-            Some(n) => n.count(),
+            Some(n) => n.len(),
         }
     }
 
-    /// Returns a vector with all digests (hashes) on the path to key k from the underlying tree.
-    /// 
-    /// The first element corresponds to the digest of the leaf with the key (or the placeholder it is behind),
-    /// moving up all the way to the digest of the tree root.
-    pub fn get_path_digests<Q: ?Sized>(&self, k: &Q) -> Vec<Digest>
+    pub fn find_in_path<Q: ?Sized>(&self, k: &Q, d: &Digest) -> Result<Option<&Node<K, V>>, ()>
     where
         K: Borrow<Q>,
         Q: Serialize + Eq,
     {
         match &self.root {
-            None => vec!(Placeholder::default().hash()),
-            Some(r) => r.get_path_digests(k, 0),
+            None if *d == Placeholder::default().hash() => Ok(None),
+            None => Err(()),
+            Some(r) => r.find_in_path(k, d, 0),
+        }
+    }
+
+    // Behaviour is unspecified if the tree is not consistent with proof
+    pub fn extend_knowledge<Q: ?Sized>(&mut self, k: &Q, new_count: usize, proof: &Tree<K, V>)
+    where
+        K: Borrow<Q>,
+        Q: Serialize + Eq,
+    {
+        self.root = match self.root.take() {
+            None if proof.root.is_some() => panic!("extending knowledge with inconsistent proof"),
+            None => None,
+            Some(_) if proof.root.is_none() => panic!("extending knowledge with inconsistent proof"),
+            Some(r) => r.extend_knowledge(k, new_count, &proof.root.as_ref().unwrap(), 0),
+        };
+    }
+
+    pub fn insert_with_count(&mut self, k: K, v: V, count: usize) -> Option<V> {
+        match self.root.take() {
+            None => {
+                self.root = Some(Leaf::new(k, v, count).into());
+                None
+            }
+            Some(n) => match n.insert(k, v, count, 0) {
+                (v @ _, n @ _) => {
+                    self.root = Some(n);
+                    v
+                }
+            },
+        }
+    }
+
+    pub fn replace_with_placeholder<Q: ?Sized, F>(
+        &mut self,
+        k: &Q,
+        max_count: usize,
+        is_close: &F)
+    where
+        K: Borrow<Q>,
+        Q: Serialize + Eq,
+        F: Fn([u8; 32], usize) -> bool,
+    {
+        match self.root.take() {
+            None => {
+                // panic!("Attempting to replace non existent (k,v) with placeholder")
+                ()
+            }
+            Some(n) => { 
+                self.root = Some(n.replace_with_placeholder(k, max_count, is_close, 0));
+            },
         }
     }
 }
