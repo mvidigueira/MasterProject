@@ -55,7 +55,7 @@ pub fn closest<'a>(
     }
 }
 
-fn leading_bits_in_common(a: &[u8; 32], b: &[u8; 32]) -> usize {
+pub fn leading_bits_in_common(a: &[u8; 32], b: &[u8; 32]) -> usize {
     let mut count = 0;
     for i in 0..=255 {
         if bit(a, i) == bit(b, i) {

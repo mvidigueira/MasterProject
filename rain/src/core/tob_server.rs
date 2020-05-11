@@ -231,7 +231,7 @@ mod test {
     async fn tob_forwarding() {
         init_logger();
 
-        let config = SetupConfig::setup(1, DataTree::new()).await;
+        let config = SetupConfig::setup(1, DataTree::new(), 10).await;
 
         let mut connection = create_peer_and_connect(&config.tob_info).await;
 

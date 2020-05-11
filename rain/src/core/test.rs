@@ -56,7 +56,7 @@ pub struct SetupConfig {
 }
 
 impl SetupConfig {
-    pub async fn setup(nr_peer: usize, dt: DataTree) -> Self {
+    pub async fn setup(nr_peer: usize, dt: DataTree, h_len: usize) -> Self {
         if nr_peer == 0 {
             panic!("SetupConfig must be setup with at least 1 core node");
         }
@@ -68,9 +68,11 @@ impl SetupConfig {
         let corenodes = future::join_all((0..nr_peer).map(|_| {
             setup_corenode(
                 next_test_ip4(),
-                dir_info.addr(),
+                &dir_info,
                 tob_addr,
+                nr_peer,
                 dt.clone(),
+                h_len,
             )
         }))
         .await;
@@ -103,12 +105,14 @@ impl SetupConfig {
 
 pub async fn setup_corenode(
     server_addr: SocketAddr,
-    dir_addr: SocketAddr,
+    dir_info: &DirectoryInfo,
     tob_addr: SocketAddr,
+    nr_peer: usize,
     dt: DataTree,
+    h_len: usize,
 ) -> (Sender<()>, JoinHandle<()>, DirectoryInfo) {
     let (core_server, exit_tx) =
-        CoreNode::new(server_addr, dir_addr, tob_addr, dt)
+        CoreNode::new(server_addr, dir_info, tob_addr, nr_peer, dt, h_len)
             .await
             .expect("core node creation failed");
 
@@ -186,7 +190,7 @@ pub async fn create_peer_and_connect(target: &DirectoryInfo) -> Connection {
 async fn config_setup_teardown() {
     init_logger();
 
-    let config = SetupConfig::setup(5, DataTree::new()).await;
+    let config = SetupConfig::setup(5, DataTree::new(), 1).await;
     config.tear_down().await;
 }
 

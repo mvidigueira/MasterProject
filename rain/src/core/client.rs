@@ -5,14 +5,14 @@ use drop::crypto::{self, Digest};
 use drop::net::{Connector, DirectoryConnector, DirectoryInfo, TcpConnector};
 
 use super::{
-    closest, DataTree, RecordID, RuleTransaction, TxRequest, TxResponse,
+    closest, DataTree, RecordID, RuleTransaction, TxRequest, TxResponse, history_tree::HistoryTree
 };
 
 use super::{ClientError, ReplyError};
 
 use futures::future;
 
-use tracing::debug;
+use tracing::{error, debug};
 
 pub struct ClientNode {
     corenodes: Vec<(Digest, DirectoryInfo)>,
@@ -77,37 +77,48 @@ impl ClientNode {
             m.get_mut(info).unwrap().push(r_id);
         }
 
-        let results =
+        let mut results =
             future::join_all(m.drain().map(|(k, v)| async move {
-                self.get_merkle_proof(&k, v).await
+                (v.clone(), self.get_merkle_proof(&k, v).await)
             }))
             .await;
 
-        let mut dt_o: Option<DataTree> = None;
-        for r in results {
-            let t = r?;
-            dt_o = match dt_o {
-                None => Some(t),
-                Some(mut dt) => {
-                    dt.merge(&t)?;
-                    Some(dt)
-                }
+        let mut h_tree = HistoryTree::new(1, drop::crypto::hash(&0).unwrap(), vec!());
+        let mut max = 0;
+        let mut max_ind = 0;
+
+        for i in 0..results.len() {
+            if results[i].1.is_err() {
+                return Err(results.remove(i).1.unwrap_err().into())
+            }
+
+            let (count, _) = results[i].1.as_ref().unwrap();
+            if *count > max {
+                max = *count;
+                max_ind = i;
             }
         }
 
-        match dt_o {
-            Some(dt) => Ok(dt),
-            None => {
-                unreachable!();
+        h_tree.tree = results.remove(max_ind).1.unwrap().1;
+
+        for r in results.drain(..) {
+            let t = r.1.unwrap().1;
+            let records = r.0.iter().collect();
+            if h_tree.consistent_with(&t) && h_tree.consistent_with_inserts(&t, &records) {
+                h_tree.merge_consistent(&t, &records);
+            } else {
+                error!("Inconsistency detected between proofs when collecting");
             }
         }
+
+        Ok(h_tree.tree)
     }
 
     async fn get_merkle_proof(
         &self,
         corenode_info: &DirectoryInfo,
         records: Vec<RecordID>,
-    ) -> Result<DataTree, ClientError> {
+    ) -> Result<(usize, DataTree), ClientError> {
         let mut connection = self
             .connector
             .connect(corenode_info.public(), &corenode_info.addr())
@@ -165,7 +176,7 @@ mod test {
         t.insert("Bob".to_string(), vec![1u8]);
         t.insert("Charlie".to_string(), vec![2u8]);
 
-        let config = SetupConfig::setup(3, t.clone()).await;
+        let config = SetupConfig::setup(3, t.clone(), 10).await;
         let tob_info = &config.tob_info;
         let dir_info = &config.dir_info;
 
@@ -207,7 +218,7 @@ mod test {
         t.insert("Bob".to_string(), (1000i32).to_be_bytes().to_vec());
         t.insert("transfer_rule".to_string(), rule_buffer);
 
-        let config = SetupConfig::setup(1, t.clone()).await;
+        let config = SetupConfig::setup(1, t.clone(), 10).await;
         let tob_info = &config.tob_info;
         let dir_info = &config.dir_info;
 

@@ -1,24 +1,21 @@
-use std::collections::HashMap;
-use std::fmt::Display;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use drop::crypto::key::exchange::{Exchanger, PublicKey};
+use drop::crypto::{self, key::exchange::{Exchanger, PublicKey}};
 use drop::net::{
     Connection, DirectoryListener, Listener, ListenerError, TcpConnector,
-    TcpListener,
+    TcpListener, DirectoryInfo, DirectoryConnector,
 };
 
 use super::{
     DataTree, RecordID, RecordVal, RuleTransaction, TxRequest, TxResponse,
 };
-use merkle::error::MerkleError;
 
 use super::CoreNodeError;
+use super::history_tree::HistoryTree;
 
 use futures::future::{self, Either};
 
-use tokio::net::ToSocketAddrs;
 use tokio::sync::oneshot::{channel, Receiver, Sender};
 use tokio::sync::RwLock;
 use tokio::task;
@@ -31,7 +28,8 @@ use rain_wasmtime_contract::WasmContract;
 
 const RECORD_LIMIT: usize = 400;
 
-type ProtectedTree = Arc<RwLock<DataTree>>;
+type HTree = HistoryTree<RecordID, RecordVal>;
+type ProtectedTree = Arc<RwLock<HTree>>;
 
 pub struct CoreNode {
     dir_listener: DirectoryListener,
@@ -42,11 +40,13 @@ pub struct CoreNode {
 }
 
 impl CoreNode {
-    pub async fn new<A: ToSocketAddrs + Display>(
+    pub async fn new(
         node_addr: SocketAddr,
-        dir_addr: A,
+        dir_info: &DirectoryInfo,
         tob_addr: SocketAddr,
+        nr_peer: usize,
         dt: DataTree,
+        history_len: usize,
     ) -> Result<(Self, Sender<()>), CoreNodeError> {
         let (tx, rx) = channel();
 
@@ -56,10 +56,28 @@ impl CoreNode {
             .await
             .expect("listen failed");
 
-        let connector = TcpConnector::new(exchanger);
-
+        let connector = TcpConnector::new(exchanger.clone());
         let dir_listener =
-            DirectoryListener::new(listener, connector, dir_addr).await?;
+            DirectoryListener::new(listener, connector, dir_info.addr()).await?;
+
+        let connector = TcpConnector::new(exchanger.clone());
+        let mut dir_connector = DirectoryConnector::new(connector);
+        let mut peers = if nr_peer > 0 {
+            dir_connector
+                .wait(nr_peer, dir_info)
+                .await
+                .expect("could not wait")
+        } else {
+            Vec::new()
+        };
+
+        let mut h_tree = HistoryTree::new(history_len,
+            crypto::hash(exchanger.keypair().public()).unwrap(), 
+            peers.drain(..).map(|info| crypto::hash(info.public()).unwrap()).collect(),
+        );
+
+        h_tree.tree = dt;
+        h_tree.push_history();
 
         let ret = (
             Self {
@@ -67,7 +85,7 @@ impl CoreNode {
                 tob_addr: tob_addr,
                 exit: rx,
 
-                data: Arc::from(RwLock::new(dt)),
+                data: Arc::from(RwLock::new(h_tree)),
             },
             tx,
         );
@@ -185,9 +203,9 @@ impl TxRequestHandler {
             }
         }
 
-        drop(guard);
+        self.connection.send(&TxResponse::GetProof((guard.history_count, t))).await?;
 
-        self.connection.send(&TxResponse::GetProof(t)).await?;
+        drop(guard);
 
         Ok(())
     }
@@ -204,11 +222,16 @@ impl TxRequestHandler {
 
         let mut guard = self.data.write().await;
 
-        let t = guard.get_validator();
-        if !t.validate(&rt.merkle_proof) {
+        if !guard.consistent_with(&rt.merkle_proof) {
             error!("Error processing transaction: invalid merkle proof");
             return Ok(());
         }
+
+        // let t = guard.get_validator();
+        // if !t.validate(&rt.merkle_proof) {
+        //     error!("Error processing transaction: invalid merkle proof");
+        //     return Ok(());
+        // }
 
         match rt.merkle_proof.get(&rt.rule_record_id) {
             Err(_) => {
@@ -247,14 +270,18 @@ impl TxRequestHandler {
                     Ok(l) => l,
                 };
 
-                if let Err(_) = self.verify_new_records(
-                    &input_ledger,
-                    &output_ledger,
-                    &rt.merkle_proof,
-                    used_record_count,
-                ) {
+                let new_keys: Vec<_> = output_ledger.keys().filter(|key| !input_ledger.contains_key(*key)).collect();
+                if new_keys.len() + used_record_count > RECORD_LIMIT {
+                    error!("Error processing transaction: record limit exceeded. Limit is {}, rule touches {}", RECORD_LIMIT, used_record_count);
                     return Ok(());
                 }
+
+                if !guard.consistent_with_inserts(&rt.merkle_proof, &new_keys) {
+                    error!("Error processing transaction: new inserts are not consistent with the latest state");
+                    return Ok(());
+                }
+
+                guard.merge_consistent(&rt.merkle_proof, &new_keys);
 
                 for (k, v) in output_ledger.drain() {
                     match input_ledger.remove(&k) {
@@ -276,6 +303,8 @@ impl TxRequestHandler {
                     guard.remove(&k);
                 }
 
+                guard.push_history();
+
                 info!("Transaction applied: local data successfully updated.");
             }
         }
@@ -285,44 +314,44 @@ impl TxRequestHandler {
         Ok(())
     }
 
-    fn verify_new_records(
-        &self,
-        input_map: &HashMap<RecordID, RecordVal>,
-        output_map: &HashMap<RecordID, RecordVal>,
-        proof: &DataTree,
-        used_record_count: usize,
-    ) -> Result<(), ()> {
-        let mut new_record_count = 0;
+    // fn verify_new_records(
+    //     &self,
+    //     input_map: &HashMap<RecordID, RecordVal>,
+    //     output_map: &HashMap<RecordID, RecordVal>,
+    //     proof: &DataTree,
+    //     used_record_count: usize,
+    // ) -> Result<(), ()> {
+    //     let mut new_record_count = 0;
 
-        for key in output_map.keys() {
-            if !input_map.contains_key(key) {
-                new_record_count += 1;
-                match proof.get(key) {
-                    Err(MerkleError::KeyNonExistant) => (),
-                    Err(MerkleError::KeyBehindPlaceholder) => {
-                        error!("Error processing transaction: contract adds or modifies a record outside merkle proof");
-                        return Err(());
-                    }
-                    Err(MerkleError::IncompatibleTrees) => unreachable!(),
-                    Ok(_) => unreachable!(),
-                }
+    //     for key in output_map.keys() {
+    //         if !input_map.contains_key(key) {
+    //             new_record_count += 1;
+    //             match proof.get(key) {
+    //                 Err(MerkleError::KeyNonExistant) => (),
+    //                 Err(MerkleError::KeyBehindPlaceholder(_)) => {
+    //                     error!("Error processing transaction: contract adds or modifies a record outside merkle proof");
+    //                     return Err(());
+    //                 }
+    //                 Err(MerkleError::IncompatibleTrees) => unreachable!(),
+    //                 Ok(_) => unreachable!(),
+    //             }
 
-                if used_record_count + new_record_count > RECORD_LIMIT {
-                    error!("Error processing transaction: record limit exceeded. Limit is {}, rule touches {}", RECORD_LIMIT, used_record_count);
-                    return Err(());
-                }
-            }
-        }
+    //             if used_record_count + new_record_count > RECORD_LIMIT {
+    //                 error!("Error processing transaction: record limit exceeded. Limit is {}, rule touches {}", RECORD_LIMIT, used_record_count);
+    //                 return Err(());
+    //             }
+    //         }
+    //     }
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 
     async fn serve(mut self) -> Result<(), CoreNodeError> {
         while let Ok(txr) = self.connection.receive::<TxRequest>().await {
             match txr {
                 TxRequest::GetProof(records) => {
                     info!(
-                        "Received getproof request. Arguments {:#?}",
+                        "Received getproof request. Arguments {:?}",
                         records
                     );
 
@@ -377,9 +406,11 @@ mod test {
 
         let (exit_tx, handle, _) = setup_corenode(
             next_test_ip4(),
-            dir_info.addr(),
+            &dir_info,
             fake_tob_addr,
+            1,
             DataTree::new(),
+            10,
         )
         .await;
 
@@ -391,7 +422,7 @@ mod test {
     async fn corenode_getproof() {
         init_logger();
 
-        let config = SetupConfig::setup(1, DataTree::new()).await;
+        let config = SetupConfig::setup(1, DataTree::new(), 10).await;
 
         let mut connection =
             create_peer_and_connect(&config.corenodes[0].2).await;
@@ -409,7 +440,7 @@ mod test {
 
             assert_eq!(
                 resp,
-                TxResponse::GetProof(DataTree::new().get_validator()),
+                TxResponse::GetProof((1, DataTree::new().get_validator())),
                 "invalid response from corenode"
             );
         }
@@ -424,7 +455,7 @@ mod test {
     async fn request_add() {
         init_logger();
 
-        let config = SetupConfig::setup(1, DataTree::new()).await;
+        let config = SetupConfig::setup(1, DataTree::new(), 10).await;
 
         let mut c_node = create_peer_and_connect(&config.corenodes[0].2).await;
         let mut c_tob = create_peer_and_connect(&config.tob_info).await;
@@ -440,7 +471,7 @@ mod test {
 
             assert_eq!(
                 resp,
-                TxResponse::GetProof(DataTree::new().get_validator()),
+                TxResponse::GetProof((1, DataTree::new().get_validator())),
                 "invalid response from corenode"
             );
 

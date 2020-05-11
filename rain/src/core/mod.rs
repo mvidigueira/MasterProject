@@ -1,6 +1,7 @@
 mod client;
 mod corenode;
 mod tob_server;
+pub mod history_tree;
 
 #[cfg(test)]
 pub mod test;
@@ -66,7 +67,7 @@ enum TxRequest {
     classic::Serialize, classic::Deserialize, Debug, Clone, Hash, PartialEq, Eq,
 )]
 enum TxResponse {
-    GetProof(Tree<RecordID, RecordVal>),
+    GetProof((usize, Tree<RecordID, RecordVal>)),
     Execute(String),
 }
 
@@ -93,7 +94,7 @@ fn closest<'a>(
             } else if i == 0 {
                 &sorted_corenodes.last().unwrap().1
             } else {
-                &sorted_corenodes[i].1
+                &sorted_corenodes[i-1].1
             }
         }
     }
