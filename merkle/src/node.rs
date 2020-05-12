@@ -1165,6 +1165,44 @@ where
             },
         }
     }
+
+    pub fn get_proof_single_with_placeholder<Q: ?Sized>(
+        &self,
+        k: &Q,
+        depth: u32,
+    ) -> Result<Self, MerkleError>
+    where
+        K: Borrow<Q>,
+        Q: Serialize + Eq,
+    {
+        let d = crypto::hash(&k).unwrap();
+        self.get_proof_single_with_placeholder_internal(k, depth, &d)
+    }
+
+    fn get_proof_single_with_placeholder_internal<Q: ?Sized>(
+        &self,
+        key: &Q,
+        depth: u32,
+        k_digest: &Digest,
+    ) -> Result<Self, MerkleError>
+    where
+        K: Borrow<Q>,
+        Q: Serialize + Eq,
+    {
+        match self {
+            Node::Internal(n) => {
+                match n.get_proof_single_internal(key, depth, k_digest) {
+                    Ok(n) => Ok(n.into()),
+                    Err(e) => Err(e),
+                }
+            }
+            Node::Placeholder(ph) => Ok(ph.clone().into()),
+            Node::Leaf(n) => match n.get_proof_single_internal(key) {
+                Ok(n) => Ok(n.into()),
+                Err(e) => Err(e),
+            },
+        }
+    }
 }
 
 impl<K, V> Leaf<K, V>

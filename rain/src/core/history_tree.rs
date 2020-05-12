@@ -92,6 +92,17 @@ where
         self.tree.get_proof(k)
     }
 
+    pub fn get_proof_with_placeholder<Q: ?Sized>(
+        &self,
+        k: &Q,
+    ) -> Result<Proof<K, V>, MerkleError>
+    where
+        K: Borrow<Q>,
+        Q: Serialize + Eq,
+    {
+        self.tree.get_proof_with_placeholder(k)
+    }
+
     // unoptimized
     pub fn get_proofs<'b, II, Q: ?Sized>(
         &self,
@@ -104,7 +115,7 @@ where
     {
         let mut t = self.tree.get_validator();
         for k in keys.into_iter() {
-            match self.tree.get_proof(k) {
+            match self.tree.get_proof_with_placeholder(k) {
                 Err(e) => return Err(e),
                 Ok(p) => t.merge(&p)?,
             }
@@ -118,22 +129,26 @@ where
             return false;
         }
 
-        for k in proof.clone_keys_to_vec().iter() {
-            match self.tree.get(k) {
+        Self::trees_are_consistent(&self.tree, &proof)
+    }
+
+    pub fn trees_are_consistent(base: &Proof<K, V>, old: &Proof<K, V>) -> bool {
+        for k in old.clone_keys_to_vec().iter() {
+            match base.get(k) {
                 Ok(v) => {
-                    if *v != *proof.get(k).unwrap() {
-                        error!("value of a record has changed (proof might be too late)");
+                    if *v != *old.get(k).unwrap() {
+                        error!("value of a record has changed (old might be too late)");
                         return false;
                     }
                 }
                 Err(MerkleError::KeyNonExistant) => {
-                    error!("record no longer exists (proof might be too late)");
+                    error!("record no longer exists (old might be too late)");
                     return false;
                 }
                 Err(MerkleError::KeyBehindPlaceholder(d)) => {
-                    match proof.find_in_path(k, &d) {
+                    match old.find_in_path(k, &d) {
                         Err(()) => {
-                            error!("proof incompatible with local stubbed node (proof might be too late)");
+                            error!("old incompatible with local stubbed node (old might be too late)");
                             return false;
                         }
                         _ => (),
@@ -151,8 +166,12 @@ where
             return false;
         }
 
+        Self::trees_are_consistent_with_inserts(&self.tree, proof, new_inserts)
+    }
+
+    pub fn trees_are_consistent_with_inserts(base: &Proof<K, V>, old: &Proof<K, V>, new_inserts: &Vec<&K>) -> bool {
         for k in new_inserts.iter() {
-            match proof.get(k) {
+            match old.get(k) {
                 Err(MerkleError::KeyNonExistant) => (),
                 _ => {
                     continue;
@@ -160,13 +179,13 @@ where
                 },
             }
 
-            match self.tree.get(k) {
+            match base.get(k) {
                 Ok(_) => {
                     return false;
                 }
                 Err(MerkleError::KeyNonExistant) => (),
                 Err(MerkleError::KeyBehindPlaceholder(d)) => {
-                    match proof.find_in_path(k, &d) {
+                    match old.find_in_path(k, &d) {
                         Err(()) => {
                             return false;
                         }
@@ -201,12 +220,20 @@ where
     pub fn merge_consistent(&mut self, proof: &Tree<K, V>, new_inserts: &Vec<&K>) {
         let existing_keys = proof.clone_keys_to_vec();
         for k in existing_keys.iter() {
-            self.tree.extend_knowledge(k, self.history_count, proof);
             self.add_touch(k);
         }
 
+        Self::merge_consistent_trees(&mut self.tree, proof, new_inserts, self.history_count);
+    }
+
+    pub fn merge_consistent_trees(base: &mut Tree<K, V>, old: &Tree<K, V>, new_inserts: &Vec<&K>, count: usize) {
+        let existing_keys = old.clone_keys_to_vec();
+        for k in existing_keys.iter() {
+            base.extend_knowledge(k, count, old);
+        }
+
         for k in new_inserts.iter() {
-            self.tree.extend_knowledge(k, self.history_count, proof);
+            base.extend_knowledge(k, count, old);
         }
     }
 

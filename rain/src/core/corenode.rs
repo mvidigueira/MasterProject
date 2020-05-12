@@ -76,7 +76,9 @@ impl CoreNode {
             peers.drain(..).map(|info| crypto::hash(info.public()).unwrap()).collect(),
         );
 
-        h_tree.tree = dt;
+        for (k,v) in dt.clone_to_vec().drain(..) {
+            h_tree.insert(k, v);
+        }
         h_tree.push_history();
 
         let ret = (
@@ -195,7 +197,7 @@ impl TxRequestHandler {
 
         let mut t = guard.get_validator();
         for r in records {
-            match guard.get_proof(&r) {
+            match guard.get_proof_with_placeholder(&r) {
                 Ok(proof) => {
                     t.merge(&proof).unwrap();
                 }
@@ -226,12 +228,6 @@ impl TxRequestHandler {
             error!("Error processing transaction: invalid merkle proof");
             return Ok(());
         }
-
-        // let t = guard.get_validator();
-        // if !t.validate(&rt.merkle_proof) {
-        //     error!("Error processing transaction: invalid merkle proof");
-        //     return Ok(());
-        // }
 
         match rt.merkle_proof.get(&rt.rule_record_id) {
             Err(_) => {
@@ -356,10 +352,15 @@ impl TxRequestHandler {
                     );
 
                     // if self.from_client {
-                    self.handle_get_proof(records).await?;
+                    self.handle_get_proof(records.clone()).await?;
                     // } else {
                     //     error!("TxRequest::GetProof should be sent directly by a client, not via TOB!");
                     // }
+
+                    info!(
+                        "Replying to getproof request. Arguments {:?}",
+                        records
+                    );
                 }
                 TxRequest::Execute(rt) => {
                     info!(

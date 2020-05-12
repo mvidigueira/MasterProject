@@ -687,6 +687,23 @@ where
             },
         }
     }
+
+    pub fn get_proof_with_placeholder<Q: ?Sized>(
+        &self,
+        k: &Q,
+    ) -> Result<Proof<K, V>, MerkleError>
+    where
+        K: Borrow<Q>,
+        Q: Serialize + Eq,
+    {
+        match &self.root {
+            None => Ok(Tree { root: None }),
+            Some(r) => match r.get_proof_single_with_placeholder(k, 0) {
+                Err(r) => Err(r),
+                Ok(n) => Ok(Tree { root: Some(n) }),
+            },
+        }
+    }
 }
 
 /// A merkle proof. Used in the context of a *validating* tree (usually incomplete).

@@ -29,8 +29,13 @@ error! {
 }
 
 error! {
+    type: InconsistencyError,
+    description: "merkle trees are not consistent"
+}
+
+error! {
     type: ClientError,
-    causes: (ConnectError, SendError, ReceiveError, ReplyError, MerkleError),
+    causes: (ConnectError, SendError, ReceiveError, ReplyError, MerkleError, InconsistencyError),
     description: "client failure"
 }
 
