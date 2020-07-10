@@ -103,8 +103,7 @@ impl ClientNode {
 
         for r in results.drain(..) {
             let t = r.1.unwrap().1;
-            let records = r.0.iter().collect();
-            if HistoryTree::trees_are_consistent(&base, &t) && HistoryTree::trees_are_consistent_with_inserts(&base, &t, &records) {
+            if HistoryTree::trees_are_consistent_given_records(&base, &t, &records) {
                 HistoryTree::merge_consistent_trees(&mut base, &t, &records, 0);
             } else {
                 error!("Inconsistency detected between proofs when collecting");
@@ -139,9 +138,10 @@ impl ClientNode {
         &self,
         proof: DataTree,
         rule: RecordID,
+        touched_records: Vec<RecordID>,
         args: &T,
     ) -> Result<(), ClientError> {
-        let rt = RuleTransaction::new(proof, rule, args);
+        let rt = RuleTransaction::new(proof, rule, touched_records, args);
 
         let exchanger = Exchanger::random();
         let connector = TcpConnector::new(exchanger);
@@ -255,6 +255,7 @@ mod test {
                 .send_transaction_request(
                     proof,
                     "transfer_rule".to_string(),
+                    vec!("Alice".to_string(), "Bob".to_string(), "transfer_rule".to_string()),
                     &args,
                 )
                 .await
@@ -329,6 +330,7 @@ mod test {
                 .send_transaction_request(
                     proof_1,
                     "transfer_rule".to_string(),
+                    vec!("Alice".to_string(), "Bob".to_string(), "transfer_rule".to_string()),
                     &args_1,
                 )
                 .await
@@ -339,6 +341,7 @@ mod test {
                 .send_transaction_request(
                     proof_2,
                     "transfer_rule".to_string(),
+                    vec!("Charlie".to_string(), "Dave".to_string(), "transfer_rule".to_string()),
                     &args_2,
                 )
                 .await
@@ -413,6 +416,7 @@ mod test {
                 .send_transaction_request(
                     proof_1,
                     "transfer_rule".to_string(),
+                    vec!("Alice".to_string(), "Bob".to_string(), "transfer_rule".to_string()),
                     &args_1,
                 )
                 .await
@@ -423,6 +427,7 @@ mod test {
                 .send_transaction_request(
                     proof_2,
                     "transfer_rule".to_string(),
+                    vec!("Charlie".to_string(), "Dave".to_string(), "transfer_rule".to_string()),
                     &args_2,
                 )
                 .await
@@ -481,6 +486,7 @@ mod test {
                 .send_transaction_request(
                     proof_1,
                     "transfer_rule".to_string(),
+                    vec!("Alice".to_string(), "Bob".to_string(), "transfer_rule".to_string()),
                     &args_1,
                 )
                 .await
@@ -502,6 +508,7 @@ mod test {
                 .send_transaction_request(
                     proof_1,
                     "transfer_rule".to_string(),
+                    vec!("Charlie".to_string(), "Dave".to_string(), "transfer_rule".to_string()),
                     &args_1,
                 )
                 .await
@@ -568,6 +575,7 @@ mod test {
                 .send_transaction_request(
                     proof_1,
                     "transfer_rule".to_string(),
+                    vec!("Alice".to_string(), "Bob".to_string(), "transfer_rule".to_string()),
                     &args_1,
                 )
                 .await
@@ -589,6 +597,7 @@ mod test {
                 .send_transaction_request(
                     proof_1,
                     "transfer_rule".to_string(),
+                    vec!("Charlie".to_string(), "Dave".to_string(), "transfer_rule".to_string()),
                     &args_1,
                 )
                 .await
@@ -610,6 +619,7 @@ mod test {
                 .send_transaction_request(
                     proof_1,
                     "transfer_rule".to_string(),
+                    vec!("Aaron".to_string(), "Vanessa".to_string(), "transfer_rule".to_string()),
                     &args_1,
                 )
                 .await
@@ -631,6 +641,7 @@ mod test {
                 .send_transaction_request(
                     proof_1,
                     "transfer_rule".to_string(),
+                    vec!("Justin".to_string(), "Irina".to_string(), "transfer_rule".to_string()),
                     &args_1,
                 )
                 .await
@@ -641,5 +652,209 @@ mod test {
 
         config.tear_down().await;
         wait_for_server(tob_exit, tob_handle).await;
+    }
+
+    #[tokio::test]
+    async fn memory_footprint() {
+        init_logger();
+
+        let filename =
+            "contract_test/target/wasm32-wasi/release/contract_test.wasm";
+        let rule_buffer =
+            std::fs::read(filename).expect("could not load file into buffer");
+
+        let mut t = DataTree::new();
+        for i in 0..1000 {
+            t.insert(i.to_string(), vec!(0));
+        }
+        t.insert("transfer_rule".to_string(), rule_buffer);
+
+        let config = SetupConfig::setup(5, t.clone(), 3).await;
+        let tob_info = &config.tob_info;
+        let dir_info = &config.dir_info;
+
+        async move {
+            let client_node = ClientNode::new(tob_info, dir_info, 5)
+                .await
+                .expect("client node creation failed");
+
+            debug!("client node created");
+
+            for _ in 0..4 {
+                let proof = client_node
+                .get_merkle_proofs(vec![
+                    1.to_string(),
+                    "transfer_rule".to_string(),
+                ])
+                .await
+                .expect("merkle proof error");
+                
+                // info!("Awaiting");
+                // let _ = timeout(Duration::from_millis(2000), future::pending::<()>()).await;
+
+                let v: Vec<u8> = vec!(0);
+                let args = (1.to_string(), v);
+                client_node
+                    .send_transaction_request(
+                        proof,
+                        "transfer_rule".to_string(),
+                        vec!(1.to_string(), "transfer_rule".to_string()),
+                        &args,
+                    )
+                    .await
+                    .expect("error sending request");        
+            }
+
+            let _ = timeout(Duration::from_millis(2000), future::pending::<()>()).await;
+
+            for _ in 0..1 {
+                let proof = client_node
+                .get_merkle_proofs(vec![
+                    2.to_string(),
+                    "transfer_rule".to_string(),
+                ])
+                .await
+                .expect("merkle proof error");
+                
+                // info!("Awaiting");
+                // let _ = timeout(Duration::from_millis(2000), future::pending::<()>()).await;
+
+                let v: Vec<u8> = vec![1u8; 10000];
+                let args = (2.to_string(), v);
+                client_node
+                    .send_transaction_request(
+                        proof,
+                        "transfer_rule".to_string(),
+                        vec!(2.to_string(), "transfer_rule".to_string()),
+                        &args,
+                    )
+                    .await
+                    .expect("error sending request");        
+            }
+
+            for _ in 0..4 {
+                let proof = client_node
+                .get_merkle_proofs(vec![
+                    1.to_string(),
+                    "transfer_rule".to_string(),
+                ])
+                .await
+                .expect("merkle proof error");
+                
+                // info!("Awaiting");
+                // let _ = timeout(Duration::from_millis(2000), future::pending::<()>()).await;
+
+                let v: Vec<u8> = vec!(0);
+                let args = (1.to_string(), v);
+                client_node
+                    .send_transaction_request(
+                        proof,
+                        "transfer_rule".to_string(),
+                        vec!(1.to_string(), "transfer_rule".to_string()),
+                        &args,
+                    )
+                    .await
+                    .expect("error sending request");        
+            }
+
+            // info!("Awaiting");
+            // let _ = timeout(Duration::from_millis(2000), future::pending::<()>()).await;
+        }
+        .instrument(trace_span!("get_merkle_proofs"))
+        .await;
+
+        config.tear_down().await;
+    }
+
+    use rand::prelude::*;
+
+    #[tokio::test]
+    async fn success_rate() {
+        init_logger();
+
+        let filename =
+            "contract_test/target/wasm32-wasi/release/contract_test.wasm";
+        let rule_buffer =
+            std::fs::read(filename).expect("could not load file into buffer");
+
+        let mut t = DataTree::new();
+        for i in 0..1000 {
+            t.insert(i.to_string(), vec!(0));
+        }
+        t.insert("transfer_rule".to_string(), rule_buffer);
+
+        let config = SetupConfig::setup(1, t.clone(), 20).await;
+        let tob_info = &config.tob_info;
+        let dir_info = &config.dir_info;
+
+        async move {
+            let client_node = ClientNode::new(tob_info, dir_info, 1)
+                .await
+                .expect("client node creation failed");
+
+            debug!("client node created");
+
+            let mut rng = rand::thread_rng();
+            let mut nums: Vec<i32> = (0..1000).collect();
+            let mut execs = vec!();
+            for _ in 0..100i32 {
+                nums.shuffle(&mut rng);
+                let n = nums[0];
+                let proof = client_node
+                .get_merkle_proofs(vec![
+                    n.to_string(),
+                    "transfer_rule".to_string(),
+                ])
+                .await
+                .expect("merkle proof error");
+                execs.push((proof, n));
+            }
+
+            for (p, n) in execs {
+                let v: Vec<u8> = vec!(1);
+                let args = (n.to_string(), v);
+                client_node
+                .send_transaction_request(
+                    p,
+                    "transfer_rule".to_string(),
+                    vec!(n.to_string(), "transfer_rule".to_string()),
+                    &args,
+                )
+                .await
+                .expect("error sending request");        
+            }
+
+            let _ = timeout(Duration::from_millis(2000), future::pending::<()>()).await;
+
+            let v: Vec<String> = (0..1000i32).map(|n| n.to_string()).collect();
+            let proof_final = client_node
+                .get_merkle_proofs(v.clone())
+                .await
+                .expect("merkle proof error");
+
+            let mut total = 0;
+            for i in v {
+                match proof_final.get(&i) {
+                    Ok(v1) => {
+                        if *v1 == vec!(1u8) {
+                            total += 1;
+                        } else if *v1 == vec!(0u8) {
+                            total += 0;
+                        } else {
+                            panic!("Problem 1");
+                        }
+                    }
+                    Err(_) => {
+                        panic!("Problem 2");
+                    }
+                }
+            }
+
+            info!("Total is: {}", total);
+        }
+        .instrument(trace_span!("get_merkle_proofs"))
+        .await;
+
+        config.tear_down().await;
     }
 }

@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use drop::crypto::{self, key::exchange::{Exchanger, PublicKey}};
+use drop::crypto::{self, key::exchange::{Exchanger, PublicKey}, Digest};
 use drop::net::{
     Connection, DirectoryListener, Listener, ListenerError, TcpConnector,
     TcpListener, DirectoryInfo, DirectoryConnector,
@@ -26,9 +26,34 @@ use tracing_futures::Instrument;
 use rain_wasi_common::{Ledger, WasiSerializable};
 use rain_wasmtime_contract::WasmContract;
 
+use super::simulated_contract;
+
+use std::mem;
+
 const RECORD_LIMIT: usize = 400;
 
 type HTree = HistoryTree<RecordID, RecordVal>;
+
+impl HTree {
+    pub fn memory_usage(&self) -> (usize, usize) {
+        let mut overhead: usize = 0;
+
+        overhead += mem::size_of::<HTree>();
+
+        for k in &self.touches {
+            overhead += k.len() * mem::size_of::<Arc<RecordID>>();
+        }
+        overhead += &self.counts.len() * mem::size_of::<Arc<RecordID>>();
+        for k in &self.counts {
+            overhead += (**k).len();
+        }
+        overhead += &self.history.len() * mem::size_of::<Digest>();
+        overhead += &self.d_list.len() * mem::size_of::<Digest>();
+
+        (overhead, bincode::serialize(&self.tree).unwrap().len())
+    }
+}
+
 type ProtectedTree = Arc<RwLock<HTree>>;
 
 pub struct CoreNode {
@@ -77,6 +102,7 @@ impl CoreNode {
         );
 
         for (k,v) in dt.clone_to_vec().drain(..) {
+            h_tree.add_touch(&k);
             h_tree.insert(k, v);
         }
         h_tree.push_history();
@@ -224,10 +250,21 @@ impl TxRequestHandler {
 
         let mut guard = self.data.write().await;
 
-        if !guard.consistent_with(&rt.merkle_proof) {
-            error!("Error processing transaction: invalid merkle proof");
+        // if !guard.consistent_with(&rt.merkle_proof) {
+        //     error!("Error processing transaction: invalid merkle proof");
+        //     return Ok(());
+        // }
+
+        if rt.touched_records.len() > RECORD_LIMIT {
+            error!("Error processing transaction: record limit exceeded. Limit is {}, rule touches {}", RECORD_LIMIT, rt.touched_records.len());
             return Ok(());
+        }            
+
+        if !guard.consistent_given_records(&rt.merkle_proof, &rt.touched_records) {
+            error!("Error processing transaction: invalid merkle proof");
+            return Ok(());            
         }
+        
 
         match rt.merkle_proof.get(&rt.rule_record_id) {
             Err(_) => {
@@ -235,13 +272,13 @@ impl TxRequestHandler {
                 return Ok(());
             }
             Ok(bytes) => {
-                let mut contract = match WasmContract::load_bytes(bytes) {
-                    Err(e) => {
-                        error!("Error processing transaction: error loading wasi contract: {:?}", e);
-                        return Ok(());
-                    }
-                    Ok(c) => c,
-                };
+                // let mut contract = match WasmContract::load_bytes(bytes) {
+                //     Err(e) => {
+                //         error!("Error processing transaction: error loading wasi contract: {:?}", e);
+                //         return Ok(());
+                //     }
+                //     Ok(c) => c,
+                // };
 
                 let args = rain_wasi_common::serialize_args_from_byte_vec(
                     &rt.rule_arguments,
@@ -251,9 +288,13 @@ impl TxRequestHandler {
                 let mut input_ledger: Ledger =
                     rt.merkle_proof.clone_to_vec().into_iter().filter(|(k, _)| k != &rt.rule_record_id).collect();
 
+                // // Execute the transaction in the wasm runtime
+                // let result =
+                //     &contract.execute(input_ledger.serialize_wasi(), args);
+
                 // Execute the transaction in the wasm runtime
                 let result =
-                    &contract.execute(input_ledger.serialize_wasi(), args);
+                    &self.simulate_transaction(input_ledger.serialize_wasi(), args);                
 
                 // Extract the result
                 let mut output_ledger = match rain_wasi_common::extract_result(
@@ -266,27 +307,16 @@ impl TxRequestHandler {
                     Ok(l) => l,
                 };
 
-                let new_keys: Vec<_> = output_ledger.keys().filter(|key| !input_ledger.contains_key(*key)).collect();
-                if new_keys.len() + used_record_count > RECORD_LIMIT {
-                    error!("Error processing transaction: record limit exceeded. Limit is {}, rule touches {}", RECORD_LIMIT, used_record_count);
-                    return Ok(());
-                }
-
-                if !guard.consistent_with_inserts(&rt.merkle_proof, &new_keys) {
-                    error!("Error processing transaction: new inserts are not consistent with the latest state");
-                    return Ok(());
-                }
-
-                guard.merge_consistent(&rt.merkle_proof, &new_keys);
+                guard.merge_consistent(&rt.merkle_proof, &rt.touched_records);
 
                 for (k, v) in output_ledger.drain() {
                     match input_ledger.remove(&k) {
                         None => {
-                            info!("Inserted {:?} into data tree.", (k.clone(), v.clone()));
+                            //info!("Inserted {:?} into data tree.", (k.clone(), v.clone()));
                             guard.insert(k, v);
                         }
                         Some(v2) if v != v2 => {
-                            info!("Inserted {:?} into data tree.", (k.clone(), v.clone()));
+                            //info!("Inserted {:?} into data tree.", (k.clone(), v.clone()));
                             guard.insert(k, v);
                         }
                         _ => (),
@@ -300,8 +330,12 @@ impl TxRequestHandler {
                 }
 
                 guard.push_history();
-
-                info!("Transaction applied: local data successfully updated.");
+                
+                let (overhead, mut tree_size) = guard.memory_usage();
+                if tree_size > bytes.len() {
+                    tree_size -= bytes.len();
+                }
+                info!("Transaction applied: local data successfully updated. Overhead: {}, Data: {}", overhead, tree_size);
             }
         }
 
@@ -310,37 +344,10 @@ impl TxRequestHandler {
         Ok(())
     }
 
-    // fn verify_new_records(
-    //     &self,
-    //     input_map: &HashMap<RecordID, RecordVal>,
-    //     output_map: &HashMap<RecordID, RecordVal>,
-    //     proof: &DataTree,
-    //     used_record_count: usize,
-    // ) -> Result<(), ()> {
-    //     let mut new_record_count = 0;
-
-    //     for key in output_map.keys() {
-    //         if !input_map.contains_key(key) {
-    //             new_record_count += 1;
-    //             match proof.get(key) {
-    //                 Err(MerkleError::KeyNonExistant) => (),
-    //                 Err(MerkleError::KeyBehindPlaceholder(_)) => {
-    //                     error!("Error processing transaction: contract adds or modifies a record outside merkle proof");
-    //                     return Err(());
-    //                 }
-    //                 Err(MerkleError::IncompatibleTrees) => unreachable!(),
-    //                 Ok(_) => unreachable!(),
-    //             }
-
-    //             if used_record_count + new_record_count > RECORD_LIMIT {
-    //                 error!("Error processing transaction: record limit exceeded. Limit is {}, rule touches {}", RECORD_LIMIT, used_record_count);
-    //                 return Err(());
-    //             }
-    //         }
-    //     }
-
-    //     Ok(())
-    // }
+    fn simulate_transaction(&self, ledger: String, args: String) -> String {
+        // simulated_contract::execute(ledger, args)
+        simulated_contract::set_record_value(ledger, args)
+    }
 
     async fn serve(mut self) -> Result<(), CoreNodeError> {
         while let Ok(txr) = self.connection.receive::<TxRequest>().await {

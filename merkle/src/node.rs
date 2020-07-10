@@ -343,7 +343,7 @@ where
     pub fn replace_with_placeholder<Q: ?Sized, F>(
         self,
         k: &Q,
-        max_count: usize,
+        min_count: usize,
         is_close: &F,
         depth: u32,
     ) -> Self
@@ -353,13 +353,13 @@ where
         F: Fn([u8; 32], usize) -> bool,
     {
         let d = crypto::hash(&k).unwrap();
-        self.replace_with_placeholder_internal(k, max_count, is_close, depth, &d)
+        self.replace_with_placeholder_internal(k, min_count, is_close, depth, &d)
     }
 
     fn replace_with_placeholder_internal<Q: ?Sized, F>(
         self,
         k: &Q,
-        max_count: usize,
+        min_count: usize,
         is_close: &F,
         depth: u32,
         k_digest: &Digest,
@@ -370,12 +370,12 @@ where
         F: Fn([u8; 32], usize) -> bool,
     {
         match self {
-            Node::Internal(i) => i.replace_with_placeholder_internal(k, max_count, is_close, depth, k_digest),
+            Node::Internal(i) => i.replace_with_placeholder_internal(k, min_count, is_close, depth, k_digest),
             Node::Placeholder(_) => {
                 // panic!("Placeholder already found in path to key. Can only replace leaves with placeholder!")
                 self
             }
-            Node::Leaf(l) => l.replace_with_placeholder_internal(k, max_count, is_close, depth, k_digest),
+            Node::Leaf(l) => l.replace_with_placeholder_internal(k, min_count, is_close, depth, k_digest),
         }
     }
 
@@ -595,7 +595,7 @@ where
     fn replace_with_placeholder_internal<Q: ?Sized, F>(
         self,
         k: &Q,
-        max_count: usize,
+        min_count: usize,
         is_close: F,
         depth: u32,
         k_digest: &Digest,
@@ -608,7 +608,7 @@ where
         if self.k.borrow() != k {
             // panic!("Attempting to replace non-existing key with placeholder");
             self.into()
-        } else if self.count <= max_count && !is_close(*k_digest.as_ref(), depth as usize) {
+        } else if self.count < min_count && !is_close(*k_digest.as_ref(), depth as usize) {
             Placeholder::from(self).into()
         } else {
             self.into()
@@ -897,7 +897,7 @@ where
     fn replace_with_placeholder_internal<Q: ?Sized, F>(
         mut self,
         k: &Q,
-        max_count: usize,
+        min_count: usize,
         is_close: &F,
         depth: u32,
         k_digest: &Digest,
@@ -919,7 +919,7 @@ where
                 self.into()
             }
             Some(n) => {
-                let r = n.replace_with_placeholder_internal(k, max_count, is_close, depth + 1, k_digest);
+                let r = n.replace_with_placeholder_internal(k, min_count, is_close, depth + 1, k_digest);
                 *side = Some(Box::new(r));
 
                 match (&self.left, &self.right) {

@@ -670,7 +670,7 @@ where
     pub fn replace_with_placeholder<Q: ?Sized, F>(
         &mut self,
         k: &Q,
-        max_count: usize,
+        min_count: usize,
         is_close: &F)
     where
         K: Borrow<Q>,
@@ -683,7 +683,7 @@ where
                 ()
             }
             Some(n) => { 
-                self.root = Some(n.replace_with_placeholder(k, max_count, is_close, 0));
+                self.root = Some(n.replace_with_placeholder(k, min_count, is_close, 0));
             },
         }
     }

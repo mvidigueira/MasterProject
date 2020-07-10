@@ -40,7 +40,7 @@ pub fn next_test_ip4() -> SocketAddr {
 }
 
 pub fn get_example_rt() -> RuleTransaction {
-    RuleTransaction::new(DataTree::new(), "Alice".to_string(), &(123))
+    RuleTransaction::new(DataTree::new(), "Alice".to_string(), vec!("Alice".to_string()), &(123))
 }
 
 pub struct SetupConfig {
@@ -193,25 +193,3 @@ async fn config_setup_teardown() {
     let config = SetupConfig::setup(5, DataTree::new(), 1).await;
     config.tear_down().await;
 }
-
-// async fn create_peer_and_connect_via_directory(
-//     target: &PublicKey,
-//     dir_info: &DirectoryInfo,
-// ) -> Connection {
-//     let exchanger = Exchanger::random();
-//     let connector = TcpConnector::new(exchanger);
-//     let mut dir_connector = DirectoryConnector::new(connector);
-
-//     dir_connector
-//         .wait(1, dir_info)
-//         .await
-//         .expect("could not wait");
-
-//     let connection = dir_connector
-//         .connect(target, dir_info)
-//         .instrument(trace_span!("adder"))
-//         .await
-//         .expect("connect failed");
-
-//     connection
-// }

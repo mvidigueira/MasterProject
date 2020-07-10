@@ -14,27 +14,29 @@ use std::sync::Arc;
 
 use tracing::{error};
 
+use std::fmt::Debug;
+
 pub struct HistoryTree<K, V>
 where
-    K: Serialize + Clone + Eq + Hash,
-    V: Serialize + Clone + Eq,
+    K: Serialize + Clone + Eq + Hash + Debug,
+    V: Serialize + Clone + Eq + Debug,
 {
     pub tree: Tree<K, V>,
 
-    touches: VecDeque<Vec<Arc<K>>>,
-    counts: HashSet<Arc<K>>,
-    history: VecDeque<Digest>,
+    pub touches: VecDeque<Vec<Arc<K>>>,
+    pub counts: HashSet<Arc<K>>,
+    pub history: VecDeque<Digest>,
     pub history_count: usize,
     history_len: usize,
 
     my_d: Digest,
-    d_list: Vec<Digest>,
+    pub d_list: Vec<Digest>,
 }
 
 impl<K, V> HistoryTree<K, V>
 where
-    K: Serialize + Clone + Eq + Hash,
-    V: Serialize + Clone + Eq,
+    K: Serialize + Clone + Eq + Hash + Debug,
+    V: Serialize + Clone + Eq + Debug,
 
 {
     pub fn new(history_len: usize, my_d: Digest, mut d_list: Vec<Digest>) -> Self {
@@ -69,7 +71,6 @@ where
     }
 
     pub fn insert(&mut self, k: K, v: V) -> Option<V> {
-        self.add_touch(&k);
         self.tree.insert_with_count(k, v, self.history_count)
     }
 
@@ -130,6 +131,47 @@ where
         }
 
         Self::trees_are_consistent(&self.tree, &proof)
+    }
+
+    pub fn consistent_given_records(&self, proof: &Proof<K, V>, records: &Vec<K>) -> bool {
+        if !self.history.contains(&proof.root_hash()) {
+            error!("history does not contain root hash: {:?}", proof.root_hash());
+            return false;
+        }
+
+        Self::trees_are_consistent_given_records(&self.tree, &proof, records)        
+    }
+
+    pub fn trees_are_consistent_given_records(base: &Proof<K, V>, old: &Proof<K, V>, records: &Vec<K>) -> bool {
+        for k in records {
+            match (base.get(k), old.get(k)) {
+                (Ok(v1), Ok(v2)) => {
+                    if v1 != v2 {
+                        error!("value of a record has changed (old might be too late)");
+                        return false;
+                    }
+                }
+                (Err(MerkleError::KeyNonExistant), Err(MerkleError::KeyNonExistant)) => {},
+                (Err(MerkleError::KeyBehindPlaceholder(d)), _) => {
+                    match old.find_in_path(k, &d) {
+                        Err(()) => {
+                            error!("old incompatible with local stubbed node (old might be too late)");
+                            return false;
+                        }
+                        _ => (),
+                    }
+                }
+                (n1, n2) => {
+                    error!("mismatch between tree nodes");
+                    error!("{:?}", &n1);
+                    error!("{:?}", &n2);
+                    return false;
+                }
+
+            }
+        }
+
+        true
     }
 
     pub fn trees_are_consistent(base: &Proof<K, V>, old: &Proof<K, V>) -> bool {
@@ -203,7 +245,7 @@ where
         self.tree.get_validator()
     }
 
-    fn add_touch(&mut self, k: &K) {
+    pub fn add_touch(&mut self, k: &K) {
         let rc_k = Arc::new(k.clone());
         let rc_k = match self.counts.get(&rc_k) {
             None => {
@@ -217,22 +259,16 @@ where
     }
 
     // WARNING: behaviour is unspecified if the tree is not consistent with the proof, including new_inserts.
-    pub fn merge_consistent(&mut self, proof: &Tree<K, V>, new_inserts: &Vec<&K>) {
-        let existing_keys = proof.clone_keys_to_vec();
-        for k in existing_keys.iter() {
+    pub fn merge_consistent(&mut self, proof: &Tree<K, V>, records: &Vec<K>) {
+        Self::merge_consistent_trees(&mut self.tree, proof, records, self.history_count);
+
+        for k in records.iter() {
             self.add_touch(k);
         }
-
-        Self::merge_consistent_trees(&mut self.tree, proof, new_inserts, self.history_count);
     }
 
-    pub fn merge_consistent_trees(base: &mut Tree<K, V>, old: &Tree<K, V>, new_inserts: &Vec<&K>, count: usize) {
-        let existing_keys = old.clone_keys_to_vec();
-        for k in existing_keys.iter() {
-            base.extend_knowledge(k, count, old);
-        }
-
-        for k in new_inserts.iter() {
+    pub fn merge_consistent_trees(base: &mut Tree<K, V>, old: &Tree<K, V>, records: &Vec<K>, count: usize) {
+        for k in records {
             base.extend_knowledge(k, count, old);
         }
     }
@@ -250,12 +286,12 @@ where
         
         let touched_records = self.touches.pop_back().unwrap();
 
-        let ancient_history = std::cmp::max(self.history_count-self.history_len, 0);
+        let last_recent_history = std::cmp::max(self.history_count-self.history_len, 0);
         for k in touched_records {
             if self.d_list.len() > 0 {
-                self.tree.replace_with_placeholder(k.as_ref(), ancient_history, &is_close);
+                self.tree.replace_with_placeholder(k.as_ref(), last_recent_history, &is_close);
             } else {
-                self.tree.replace_with_placeholder(k.as_ref(), ancient_history, &|_, _| false);
+                self.tree.replace_with_placeholder(k.as_ref(), last_recent_history, &|_, _| false);
             }
 
             if Arc::strong_count(&k) == 2 {  // this is the last reference (excluding hashset)
@@ -478,9 +514,9 @@ mod tests {
         let tree2 = h_tree.get_proofs(["Bob", "Alice", "Joe", "Alistair"].iter()).unwrap();
         h_tree.tree = tree2;
 
-        assert!(h_tree.consistent_with(&late_proof));
+        assert!(h_tree.consistent_given_records(&late_proof, &vec!("Aaron", "Charlie")));
 
-        h_tree.merge_consistent(&late_proof, &vec!());
+        h_tree.merge_consistent(&late_proof, &vec!("Aaron", "Charlie"));
 
         assert_eq!(h_tree.get("Aaron"), Ok(&1));
         assert_eq!(h_tree.get("Charlie"), Ok(&2));

@@ -1,6 +1,7 @@
 mod client;
 mod corenode;
 mod tob_server;
+pub mod simulated_contract;
 pub mod history_tree;
 
 #[cfg(test)]
@@ -111,6 +112,7 @@ fn closest<'a>(
 pub struct RuleTransaction {
     merkle_proof: DataTree,
     rule_record_id: RecordID,
+    touched_records: Vec<RecordID>,
     rule_arguments: Vec<u8>,
 }
 
@@ -118,11 +120,13 @@ impl RuleTransaction {
     pub fn new<T: classic::Serialize>(
         proof: DataTree,
         rule: RecordID,
+        touched_records: Vec<RecordID>,
         args: &T,
     ) -> Self {
         Self {
             merkle_proof: proof,
             rule_record_id: rule,
+            touched_records: touched_records,
             rule_arguments: bincode::serialize(args).unwrap(),
         }
     }

@@ -1366,6 +1366,7 @@ dependencies = [
 name = "rain"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "bincode",
  "classic",
  "drop",
@@ -1375,6 +1376,7 @@ dependencies = [
  "merkle",
  "rain_wasi_common",
  "rain_wasmtime_contract",
+ "rand 0.7.3",
  "serde",
  "tokio",
  "tracing",
