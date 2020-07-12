@@ -654,7 +654,7 @@ mod test {
         wait_for_server(tob_exit, tob_handle).await;
     }
 
-    #[tokio::test]
+    // #[tokio::test]
     async fn memory_footprint() {
         init_logger();
 
@@ -768,7 +768,7 @@ mod test {
 
     use rand::prelude::*;
 
-    #[tokio::test]
+    // #[tokio::test]
     async fn success_rate() {
         init_logger();
 

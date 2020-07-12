@@ -272,13 +272,13 @@ impl TxRequestHandler {
                 return Ok(());
             }
             Ok(bytes) => {
-                // let mut contract = match WasmContract::load_bytes(bytes) {
-                //     Err(e) => {
-                //         error!("Error processing transaction: error loading wasi contract: {:?}", e);
-                //         return Ok(());
-                //     }
-                //     Ok(c) => c,
-                // };
+                let mut contract = match WasmContract::load_bytes(bytes) {
+                    Err(e) => {
+                        error!("Error processing transaction: error loading wasi contract: {:?}", e);
+                        return Ok(());
+                    }
+                    Ok(c) => c,
+                };
 
                 let args = rain_wasi_common::serialize_args_from_byte_vec(
                     &rt.rule_arguments,
@@ -288,13 +288,13 @@ impl TxRequestHandler {
                 let mut input_ledger: Ledger =
                     rt.merkle_proof.clone_to_vec().into_iter().filter(|(k, _)| k != &rt.rule_record_id).collect();
 
-                // // Execute the transaction in the wasm runtime
-                // let result =
-                //     &contract.execute(input_ledger.serialize_wasi(), args);
-
                 // Execute the transaction in the wasm runtime
                 let result =
-                    &self.simulate_transaction(input_ledger.serialize_wasi(), args);                
+                    &contract.execute(input_ledger.serialize_wasi(), args);
+
+                // // Execute the transaction in the wasm runtime
+                // let result =
+                //     &self.simulate_transaction(input_ledger.serialize_wasi(), args);                
 
                 // Extract the result
                 let mut output_ledger = match rain_wasi_common::extract_result(

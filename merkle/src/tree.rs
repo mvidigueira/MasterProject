@@ -1,4 +1,4 @@
-use crate::node::{Hashable, Leaf, MerkleError, Node, Placeholder};
+use crate::node::{Hashable, MerkleError, Node, Placeholder};
 use std::borrow::Borrow;
 
 use drop::crypto::Digest;
@@ -164,7 +164,7 @@ where
     K: Serialize + Clone + Eq,
     V: Serialize + Clone,
 {
-    root: Option<Node<K, V>>,
+    root: Box<Node<K, V>>,
 }
 
 // Special trick to have serde deserialize call a finalize hook at the end.
@@ -184,19 +184,14 @@ where
             K: Serialize + Clone + Eq,
             V: Serialize + Clone,
         {
-            root: Option<Node<K, V>>,
+            root: Node<K, V>,
         }
 
         match TreeDeser::deserialize(deserializer) {
             Err(e) => Err(e),
             Ok(mut td) => {
-                match td.root.take() {
-                    Some(mut n) => { 
-                        n.update_cache_recursive();
-                        Ok(Tree{ root: Some(n) })
-                    },
-                    None => Ok(Tree{ root: None }),
-                }
+                td.root.update_cache_recursive();
+                Ok(Tree{ root: Box::new(td.root) })
             }
         }
     }
@@ -218,7 +213,7 @@ where
     /// let mut tree: Tree<&str, i32> = Tree::new();
     /// ```
     pub fn new() -> Self {
-        Tree { root: None }
+        Tree { root: Box::new(Node::default()) }
     }
 
     /// Returns a reference to the value corresponding to the key.
@@ -257,10 +252,7 @@ where
         K: Borrow<Q>,
         Q: Serialize + Eq,
     {
-        match &self.root {
-            None => Err(MerkleError::KeyNonExistant),
-            Some(r) => r.get(k, 0),
-        }
+        self.root.get(k, 0)
     }
 
     /// Inserts a key-value pair into the tree.
@@ -293,18 +285,7 @@ where
     /// assert_eq!(tree.get("Alice"), Ok(&3));
     /// ```
     pub fn insert(&mut self, k: K, v: V) -> Option<V> {
-        match self.root.take() {
-            None => {
-                self.root = Some(Leaf::new(k, v, 0).into());
-                None
-            }
-            Some(n) => match n.insert(k, v, 0, 0) {
-                (v @ _, n @ _) => {
-                    self.root = Some(n);
-                    v
-                }
-            },
-        }
+        self.insert_with_count(k, v, 0)
     }
 
     /// Removes a key from the tree, returning the value at the key if the
@@ -333,16 +314,12 @@ where
         K: Borrow<Q>,
         Q: Serialize + Eq,
     {
-        match self.root.take() {
-            None => None,
-            Some(r) => match r.remove(k, 0) {
-                (v @ _, None) => v,
-                (v @ _, n @ _) => {
-                    self.root = n;
-                    v
-                }
-            },
-        }
+        let mut n = Node::default();
+        std::mem::swap(&mut n, self.root.as_mut());
+
+        let (v, n) = n.remove(k, 0, 0);
+        *self.root = n;
+        v
     }
 
     /// Returns a proof that the key is or is not present in the tree.
@@ -390,12 +367,9 @@ where
         K: Borrow<Q>,
         Q: Serialize + Eq,
     {
-        match &self.root {
-            None => Ok(Tree { root: None }),
-            Some(r) => match r.get_proof_single(k, 0) {
-                Err(r) => Err(r),
-                Ok(n) => Ok(Tree { root: Some(n) }),
-            },
+        match self.root.get_proof_single(k, 0) {
+            Err(r) => Err(r),
+            Ok(n) => Ok(Tree { root: Box::new(n) }),
         }
     }
 
@@ -420,22 +394,8 @@ where
     /// assert!(tree.validate(&proof));             // Still a valid proof
     /// ```
     pub fn validate(&self, proof: &Proof<K, V>) -> bool {
-        match (&self.root, &proof.root) {
-            (None, None) => true,
-            (None, Some(n)) => Placeholder::default().hash() == n.hash(),
-            (Some(n), None) => n.hash() == Placeholder::default().hash(),
-            (Some(n), Some(p)) => n.hash() == p.hash(),
-        }
+        self.root.hash() == proof.root.hash()
     }
-
-    // pub fn consistent_with(&self, proof: &Proof<K, V>) -> bool {
-    //     match (&self.root, &proof.root) {
-    //         (None, None) => true,
-    //         (None, Some(n)) => Placeholder::default().hash() == n.hash(),
-    //         (Some(n), None) => n.hash() == Placeholder::default().hash(),
-    //         (Some(n), Some(p)) => n.hash() == p.hash(),
-    //     }
-    // }
 
     /// Returns a "validator": a new tree with a single (placeholder) node compatible with
     /// the previous tree (i.e. with the same hash).
@@ -468,19 +428,12 @@ where
     /// assert_eq!(false, validator.validate(&more_recent_proof));
     /// ```
     pub fn get_validator(&self) -> Validator<K, V> {
-        match &self.root {
-            None => Tree {
-                root: Some(Placeholder::default().into()),
-            },
-            Some(n) => Tree {
-                root: Some(Placeholder::from(n).into()),
-            },
-        }
+        Tree{ root: Box::new(Placeholder::new(self.root.hash()).into()) }
     }
 
     /// Returns the `Digest` corresponding to the root of the Tree.
     pub fn root_hash(&self) -> Digest {
-        self.get_validator().root.unwrap().hash()
+        self.root.hash()
     }
 
     /// Merges two *compatible* trees, modifying the first.
@@ -518,28 +471,19 @@ where
     /// assert_eq!(validator.get(&2), Ok(&"b"));
     /// ```
     pub fn merge(&mut self, other: &Self) -> Result<(), MerkleError> {
-        let compatible = match (&self.root, &other.root) {
-            (None, None) => true,
-            (None, Some(n)) => Placeholder::default().hash() == n.hash(),
-            (Some(n), None) => n.hash() == Placeholder::default().hash(),
-            (Some(n), Some(p)) => n.hash() == p.hash(),
-        };
-
-        if !compatible {
+        if self.root.hash() != other.root.hash() {
             return Err(MerkleError::IncompatibleTrees);
         }
 
-        match (&mut self.root, &other.root) {
-            (None, _) => (),    // right must be default placeholder
-            (_, None) => (),    // left must be default placeholder
-            (Some(Node::Placeholder(_)), Some(Node::Placeholder(_))) => (),
-            (Some(Node::Placeholder(_)), Some(n)) => { 
-                self.root = Some(n.clone());
+        match (self.root.as_mut(), other.root.as_ref()) {
+            (Node::Placeholder(_), Node::Placeholder(_)) => (),
+            (Node::Placeholder(_), n) => {
+                *self.root = n.clone();
             },
-            (Some(a), Some(b)) => {
+            (a, b) => {
                 a.merge_unchecked(b);
             },
-        };
+        }
 
         Ok(())
     }
@@ -567,10 +511,7 @@ where
     /// ```
     pub fn clone_to_vec(&self) -> Vec<(K, V)> {
         let mut vec = Vec::new();
-        match &self.root {
-            None => (),
-            Some(n) => n.collect(&mut vec),
-        }
+        self.root.collect(&mut vec);
         vec
     }
 
@@ -597,10 +538,7 @@ where
     /// ```
     pub fn clone_keys_to_vec(&self) -> Vec<K> {
         let mut vec = Vec::new();
-        match &self.root {
-            None => (),
-            Some(n) => n.collect_keys(&mut vec),
-        }
+        self.root.collect_keys(&mut vec);
         vec
     }
 
@@ -620,22 +558,15 @@ where
     /// assert_eq!(tree.len(), 2);
     /// ```
     pub fn len(&self) -> usize {
-        match &self.root {
-            None => 0,
-            Some(n) => n.len(),
-        }
+        self.root.len()
     }
 
-    pub fn find_in_path<Q: ?Sized>(&self, k: &Q, d: &Digest) -> Result<Option<&Node<K, V>>, ()>
+    pub fn find_in_path<Q: ?Sized>(&self, k: &Q, d: &Digest) -> Result<&Node<K, V>, ()>
     where
         K: Borrow<Q>,
         Q: Serialize + Eq,
     {
-        match &self.root {
-            None if *d == Placeholder::default().hash() => Ok(None),
-            None => Err(()),
-            Some(r) => r.find_in_path(k, d, 0),
-        }
+        self.root.find_in_path(k, d, 0)
     }
 
     // Behaviour is unspecified if the tree is not consistent with proof
@@ -644,27 +575,19 @@ where
         K: Borrow<Q>,
         Q: Serialize + Eq,
     {
-        self.root = match self.root.take() {
-            None if proof.root.is_some() => panic!("extending knowledge with inconsistent proof"),
-            None => None,
-            Some(_) if proof.root.is_none() => panic!("extending knowledge with inconsistent proof"),
-            Some(r) => r.extend_knowledge(k, new_count, &proof.root.as_ref().unwrap(), 0),
-        };
+        let mut n = Node::default();
+        std::mem::swap(&mut n, self.root.as_mut());
+
+        *self.root = n.extend_knowledge(k, new_count, &proof.root, 0)
     }
 
     pub fn insert_with_count(&mut self, k: K, v: V, count: usize) -> Option<V> {
-        match self.root.take() {
-            None => {
-                self.root = Some(Leaf::new(k, v, count).into());
-                None
-            }
-            Some(n) => match n.insert(k, v, count, 0) {
-                (v @ _, n @ _) => {
-                    self.root = Some(n);
-                    v
-                }
-            },
-        }
+        let mut n = Node::default();
+        std::mem::swap(&mut n, self.root.as_mut());
+
+        let (v, n) = n.insert(k, v, count, 0);
+        self.root = Box::new(n);
+        v
     }
 
     pub fn replace_with_placeholder<Q: ?Sized, F>(
@@ -677,15 +600,10 @@ where
         Q: Serialize + Eq,
         F: Fn([u8; 32], usize) -> bool,
     {
-        match self.root.take() {
-            None => {
-                // panic!("Attempting to replace non existent (k,v) with placeholder")
-                ()
-            }
-            Some(n) => { 
-                self.root = Some(n.replace_with_placeholder(k, min_count, is_close, 0));
-            },
-        }
+        let mut n = Node::default();
+        std::mem::swap(&mut n, self.root.as_mut());
+
+        *self.root = n.replace_with_placeholder(k, min_count, is_close, 0);
     }
 
     pub fn get_proof_with_placeholder<Q: ?Sized>(
@@ -696,12 +614,9 @@ where
         K: Borrow<Q>,
         Q: Serialize + Eq,
     {
-        match &self.root {
-            None => Ok(Tree { root: None }),
-            Some(r) => match r.get_proof_single_with_placeholder(k, 0) {
-                Err(r) => Err(r),
-                Ok(n) => Ok(Tree { root: Some(n) }),
-            },
+        match self.root.get_proof_single_with_placeholder(k, 0) {
+            Err(r) => Err(r),
+            Ok(n) => Ok(Tree { root: Box::new(n) }),
         }
     }
 }
