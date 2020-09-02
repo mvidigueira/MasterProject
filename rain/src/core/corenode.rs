@@ -249,12 +249,7 @@ impl TxRequestHandler {
         }
 
         let mut guard = self.data.write().await;
-
-        // if !guard.consistent_with(&rt.merkle_proof) {
-        //     error!("Error processing transaction: invalid merkle proof");
-        //     return Ok(());
-        // }
-
+        
         if rt.touched_records.len() > RECORD_LIMIT {
             error!("Error processing transaction: record limit exceeded. Limit is {}, rule touches {}", RECORD_LIMIT, rt.touched_records.len());
             return Ok(());

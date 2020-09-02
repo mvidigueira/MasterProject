@@ -1,11 +1,9 @@
-// TODO: REMOVE THIS LATER!
-#![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
 use std::convert::TryFrom;
 
-use super::util::{bit};
+use super::util::{bit, set_bit, leading_bits_in_common};
 
 use drop::crypto::{self, Digest};
 use std::fmt;
@@ -50,20 +48,6 @@ where
     K: Serialize + Clone + Eq,
     V: Serialize + Clone,
 {
-    fn is_leaf(&self) -> bool {
-        match self {
-            Node::Leaf(_) => true,
-            _ => false,
-        }
-    }
-
-    fn is_internal(&self) -> bool {
-        match self {
-            Node::Internal(_) => true,
-            _ => false,
-        }
-    }
-
     pub fn is_placeholder(&self) -> bool {
         match self {
             Node::Placeholder(_) => true,
@@ -184,6 +168,20 @@ where
             Node::Placeholder(ph) => Err(KeyBehindPlaceholder(ph.hash())),
             Node::Leaf(l) => l.get_internal(k),
             Node::Empty(_) => Err(KeyNonExistant),
+        }
+    }
+
+    pub fn has_valid_key_positions(&self) -> bool {
+        let mut cur: [u8; 32] = [0; 32];
+        self.has_valid_key_positions_internal(&mut cur, 0)
+    }
+
+    fn has_valid_key_positions_internal(&self, current: &mut [u8; 32], depth: u32) -> bool {
+        match &self {
+            Node::Internal(i) => i.has_valid_key_positions_internal(current, depth),
+            Node::Placeholder(_) => true,
+            Node::Leaf(l) => leading_bits_in_common(current, l.hash().as_ref()) as u32 >= depth,
+            Node::Empty(_) => true,
         }
     }
     
@@ -807,6 +805,16 @@ where
 
     fn right(&self) -> &Node<K, V> {
         &self.right
+    }
+
+    fn has_valid_key_positions_internal(&self, current: &mut [u8; 32], depth: u32) -> bool {
+        set_bit(current, depth as u8, false);
+        if !self.left().has_valid_key_positions_internal(current, depth+1) {
+            return false;
+        }
+
+        set_bit(current, depth as u8, true);
+        self.right().has_valid_key_positions_internal(current, depth+1)
     }
 
     fn get_internal<Q: ?Sized>(

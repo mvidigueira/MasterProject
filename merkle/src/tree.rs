@@ -1,4 +1,5 @@
 use crate::node::{Hashable, MerkleError, Node, Placeholder};
+
 use std::borrow::Borrow;
 
 use drop::crypto::Digest;
@@ -158,6 +159,8 @@ use serde::{Deserialize, Serialize, Deserializer};
 ///          k2   k3
 /// ```
 
+use serde::de;
+
 #[derive(Debug, Serialize, Default, Eq, PartialEq, Clone, Hash)]
 pub struct Tree<K, V>
 where
@@ -190,6 +193,9 @@ where
         match TreeDeser::deserialize(deserializer) {
             Err(e) => Err(e),
             Ok(mut td) => {
+                if !td.root.has_valid_key_positions() {
+                    return Err(de::Error::custom("tree leaves do not obey hash position requirements"));
+                }
                 td.root.update_cache_recursive();
                 Ok(Tree{ root: Box::new(td.root) })
             }
