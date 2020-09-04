@@ -1,6 +1,5 @@
-use std::{error::Error, fmt, fmt::Display};
+use std::{error::Error, fmt};
 use drop::crypto::Digest;
-use serde::{de, ser};
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum MerkleError {

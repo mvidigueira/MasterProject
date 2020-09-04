@@ -107,6 +107,14 @@ impl ClientNode {
                 HistoryTree::merge_consistent_trees(&mut base, &t, &records, 0);
             } else {
                 error!("Inconsistency detected between proofs when collecting");
+                // if let Ok(_) = base.get(&"transfer_rule".to_string()) {
+                //     base.insert("transfer_rule".to_string(), vec!(0)); // remove after debugging
+                // }
+                // if let Ok(_) = t.get(&"transfer_rule".to_string()) {
+                //     t.insert("transfer_rule".to_string(), vec!(0)); // remove after debugging
+                // }
+                // error!("Tree base: {:#?}", &base);                  // remove after debugging
+                // error!("Tree old: {:#?}", &t);                      // remove after debugging
                 return Err(InconsistencyError::new().into())
             }
         }
@@ -463,7 +471,7 @@ mod test {
         }
         t.insert("transfer_rule".to_string(), rule_buffer);
 
-        let config = SetupConfig::setup(3, t.clone(), 1).await;
+        let config = SetupConfig::setup(3, t.clone(), 2).await;
         let tob_info = &config.tob_info;
         let dir_info = &config.dir_info;
 

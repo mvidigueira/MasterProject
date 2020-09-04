@@ -270,7 +270,7 @@ impl TxRequestHandler {
                 let mut contract = match WasmContract::load_bytes(bytes) {
                     Err(e) => {
                         error!("Error processing transaction: error loading wasi contract: {:?}", e);
-                        return Ok(());
+                        return Ok(());  // refactor: change this to Err
                     }
                     Ok(c) => c,
                 };
@@ -306,10 +306,12 @@ impl TxRequestHandler {
 
                 for (k, v) in output_ledger.drain() {
                     match input_ledger.remove(&k) {
+                        // new (k,v)
                         None => {
                             //info!("Inserted {:?} into data tree.", (k.clone(), v.clone()));
                             guard.insert(k, v);
                         }
+                        // modified (k,v)
                         Some(v2) if v != v2 => {
                             //info!("Inserted {:?} into data tree.", (k.clone(), v.clone()));
                             guard.insert(k, v);
@@ -318,9 +320,8 @@ impl TxRequestHandler {
                     }
                 }
 
-                // check that this is working correctly
                 for (k, _) in input_ledger.drain() {
-                    info!("Removed {:?} from data tree.", k);
+                    //info!("Removed {:?} from data tree.", k);
                     guard.remove(&k);
                 }
 
@@ -443,7 +444,7 @@ mod test {
 
             assert_eq!(
                 resp,
-                TxResponse::GetProof((1, DataTree::new().get_validator())),
+                TxResponse::GetProof((1, DataTree::new())),
                 "invalid response from corenode"
             );
         }
@@ -474,7 +475,7 @@ mod test {
 
             assert_eq!(
                 resp,
-                TxResponse::GetProof((1, DataTree::new().get_validator())),
+                TxResponse::GetProof((1, DataTree::new())),
                 "invalid response from corenode"
             );
 

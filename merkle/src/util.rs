@@ -31,7 +31,6 @@ pub fn clear_bits_to_end(arr: &mut [u8; 32], start_index: u8) {
     }
 }
 
-
 // For tests. TODO: Refactor directory structure and put these functions into their own file
 
 pub fn closest<'a>(

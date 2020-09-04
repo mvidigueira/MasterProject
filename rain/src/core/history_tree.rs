@@ -161,6 +161,7 @@ where
                         _ => (),
                     }
                 }
+                (Ok(_), _) => {},
                 (n1, n2) => {
                     error!("mismatch between tree nodes");
                     error!("{:?}", &n1);
@@ -286,7 +287,7 @@ where
         
         let touched_records = self.touches.pop_back().unwrap();
 
-        let last_recent_history = std::cmp::max(self.history_count-self.history_len, 0);
+        let last_recent_history = std::cmp::max(self.history_count+1-self.history_len, 0);
         for k in touched_records {
             if self.d_list.len() > 0 {
                 self.tree.replace_with_placeholder(k.as_ref(), last_recent_history, &is_close);
@@ -560,9 +561,11 @@ mod tests {
         let mut h_tree = HistoryTree::new(2, unused, vec!());
     
         h_tree.insert("Bob", 1);    // L, R, ...
+        h_tree.add_touch(&"Bob");
         h_tree.push_history();
 
         h_tree.insert("Aaron", 2);  // R, ...
+        h_tree.add_touch(&"Aaron");
         h_tree.push_history();
 
         h_tree.get("Bob").expect("Should be OK");
@@ -574,12 +577,6 @@ mod tests {
         h_tree.get("Aaron").expect("Should be OK");
 
         h_tree.push_history();
-        println!("Counts: {:#?}", h_tree.counts);
-        println!("History: {:#?}", h_tree.history);
-        println!("H_count {:#?}", h_tree.history_count);
-        println!("H_len {:#?}", h_tree.history_len);
-        println!("Touches: {:#?}", h_tree.touches);
-        println!("Tree: {:#?}", h_tree.tree);
 
         h_tree.get("Bob").expect_err("Should be behind placeholder");
         h_tree.get("Aaron").expect_err("Should be behind placeholder");
@@ -598,12 +595,15 @@ mod tests {
         let mut h_tree = HistoryTree::new(2, me, v);
     
         h_tree.insert("Bob", 1);    // L, R, ...
+        h_tree.add_touch(&"Bob");
         h_tree.insert("Charlie", 2);
+        h_tree.add_touch(&"Charlie");
         h_tree.push_history();
 
         let proof = h_tree.get_proofs(["Bob", "Charlie"].iter()).unwrap();
 
         h_tree.insert("Aaron", 2);  // R, ...
+        h_tree.add_touch(&"Aaron");
         h_tree.push_history();
 
         h_tree.get("Bob").expect("Should be OK");
@@ -626,7 +626,8 @@ mod tests {
         }
 
         h_tree.insert("Vanessa", 42);
-        h_tree.merge_consistent(&proof, &vec!());
+        h_tree.add_touch(&"Vanessa");
+        h_tree.merge_consistent(&proof, &vec!("Bob", "Charlie"));
 
         h_tree.push_history();
 

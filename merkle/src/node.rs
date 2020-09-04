@@ -180,7 +180,7 @@ where
         match &self {
             Node::Internal(i) => i.has_valid_key_positions_internal(current, depth),
             Node::Placeholder(_) => true,
-            Node::Leaf(l) => leading_bits_in_common(current, l.hash().as_ref()) as u32 >= depth,
+            Node::Leaf(l) => leading_bits_in_common(current, crypto::hash(l.key()).unwrap().as_ref()) as u32 >= depth,
             Node::Empty(_) => true,
         }
     }
