@@ -15,7 +15,7 @@ use tokio::task::{self, JoinHandle};
 
 use tracing::trace_span;
 use tracing_futures::Instrument;
-use tracing_subscriber::FmtSubscriber;
+use tracing_subscriber::{FmtSubscriber, EnvFilter};
 
 use futures::future;
 
@@ -23,9 +23,9 @@ static PORT_OFFSET: AtomicU16 = AtomicU16::new(0);
 
 /// Initialize an asynchronous logger for test environment
 pub fn init_logger() {
-    if let Some(level) = env::var("RUST_LOG").ok().map(|x| x.parse().ok()) {
+    if let Ok(filter) = EnvFilter::try_from_default_env() {
         let subscriber =
-            FmtSubscriber::builder().with_max_level(level).finish();
+            FmtSubscriber::builder().with_env_filter(filter).finish();
 
         let _ = tracing::subscriber::set_global_default(subscriber);
     }

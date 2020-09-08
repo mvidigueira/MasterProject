@@ -8,7 +8,7 @@ use drop::net::{
 };
 
 use super::{TxRequest, TxResponse};
-use classic::{BestEffort, Broadcast, System};
+use classic::{BestEffort, BestEffortBroadcaster, Broadcaster, System};
 
 use super::{BroadcastError, TobServerError};
 
@@ -21,7 +21,7 @@ use tokio::task;
 use tracing::{debug, error, info, trace_span};
 use tracing_futures::Instrument;
 
-type ProtectedBeb = Arc<RwLock<BestEffort<TxRequest>>>;
+type ProtectedBeb = Arc<RwLock<BestEffortBroadcaster>>;
 
 pub struct TobServer {
     listener: Box<dyn Listener<Candidate = SocketAddr>>,
@@ -63,17 +63,20 @@ impl TobServer {
 
         let connector = TcpConnector::new(exchanger);
 
-        let beb = System::new_with_connector_zipped(
+
+
+        let sys = System::new_with_connector_zipped(
             &connector,
             peers.drain(..).map(|info| (*info.public(), info.addr())),
         )
-        .await
-        .into();
+        .await;
+
+        let (bebs, _) = BestEffort::with::<TxRequest>(sys);
 
         let ret = (
             Self {
                 listener: Box::new(listener),
-                beb: Arc::from(RwLock::new(beb)),
+                beb: Arc::from(RwLock::new(bebs)),
                 exit: rx,
             },
             tx,
@@ -166,14 +169,18 @@ impl TobRequestHandler {
         &mut self,
         txr: TxRequest,
     ) -> Result<(), TobServerError> {
-        if let Err(_) = self.beb.write().await.broadcast(&txr).await {
-            let _ = self
+        if let Some(v) = self.beb.write().await.broadcast(&txr).await {
+            if v.len() > 0 {
+                let _ = self
                 .connection
                 .send(&TxResponse::Execute(String::from(
                     "Error forwarding to peers",
                 )))
                 .await;
             return Err(BroadcastError::new().into());
+            }
+        } else {
+            error!("Broadcast instance not usable anymore!");
         }
 
         let _ = self
