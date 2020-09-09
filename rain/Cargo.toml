@@ -9,11 +9,10 @@ edition = "2018"
 [dependencies]
 # drop = { path = "/home/manuel/Documents/M4/rust_playground/drop" }
 drop = { git = "https://github.com/Distributed-EPFL/drop", branch = "feature/io" }
-macros = { path = "/home/manuel/Documents/M4/rust_playground/drop/macros" }
+macros = { git = "https://github.com/Distributed-EPFL/drop", branch= "feature/io" }
 merkle = { path = "../merkle" }
 rain_wasi_common = { path = "../rules_playtest/rain_wasi_common" }
 rain_wasmtime_contract = { path = "../rules_playtest/rain_wasmtime_contract" }
-# classic = { path = "/home/manuel/Documents/M4/rust_playground/classic" }
 classic = { git = "https://github.com/Distributed-EPFL/classic" }
 serde = "1.0.102"
 tokio = "0.2.0"
