@@ -1,4 +1,3 @@
-use std::env;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicU16, Ordering};
 
@@ -15,7 +14,7 @@ use tokio::task::{self, JoinHandle};
 
 use tracing::trace_span;
 use tracing_futures::Instrument;
-use tracing_subscriber::{FmtSubscriber, EnvFilter};
+use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 use futures::future;
 
@@ -40,7 +39,12 @@ pub fn next_test_ip4() -> SocketAddr {
 }
 
 pub fn get_example_rt() -> RuleTransaction {
-    RuleTransaction::new(DataTree::new(), "Alice".to_string(), vec!("Alice".to_string()), &(123))
+    RuleTransaction::new(
+        DataTree::new(),
+        "Alice".to_string(),
+        vec!["Alice".to_string()],
+        &(123),
+    )
 }
 
 pub struct SetupConfig {

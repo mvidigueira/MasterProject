@@ -1,8 +1,4 @@
-rules_playtest/target
-rules_playtest/contract_1/target
-rules_playtest/contract_2/target
-rules_playtest/rain_wasi_common/target
-rules_playtest/rain_wasmtime_contract/target
-merkle/target
-rain/target
-rain/contract_test/target
+target
+.vscode
+wasmtime_test
+wasmtime_test_modern

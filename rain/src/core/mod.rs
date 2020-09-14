@@ -1,8 +1,8 @@
 mod client;
 mod corenode;
-mod tob_server;
-pub mod simulated_contract;
 pub mod history_tree;
+pub mod simulated_contract;
+mod tob_server;
 
 #[cfg(test)]
 pub mod test;
@@ -100,7 +100,7 @@ fn closest<'a>(
             } else if i == 0 {
                 &sorted_corenodes.last().unwrap().1
             } else {
-                &sorted_corenodes[i-1].1
+                &sorted_corenodes[i - 1].1
             }
         }
     }

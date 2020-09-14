@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use drop::crypto::key::exchange::{Exchanger, PublicKey};
 use drop::net::{
-    Connection, DirectoryConnector, DirectoryInfo, Listener, TcpConnector,
-    TcpListener, ListenerError,
+    Connection, DirectoryConnector, DirectoryInfo, Listener, ListenerError,
+    TcpConnector, TcpListener,
 };
 
 use super::{TxRequest, TxResponse};
@@ -62,8 +62,6 @@ impl TobServer {
         drop(dir_connector);
 
         let connector = TcpConnector::new(exchanger);
-
-
 
         let sys = System::new_with_connector_zipped(
             &connector,
@@ -172,12 +170,12 @@ impl TobRequestHandler {
         if let Some(v) = self.beb.write().await.broadcast(&txr).await {
             if v.len() > 0 {
                 let _ = self
-                .connection
-                .send(&TxResponse::Execute(String::from(
-                    "Error forwarding to peers",
-                )))
-                .await;
-            return Err(BroadcastError::new().into());
+                    .connection
+                    .send(&TxResponse::Execute(String::from(
+                        "Error forwarding to peers",
+                    )))
+                    .await;
+                return Err(BroadcastError::new().into());
             }
         } else {
             error!("Broadcast instance not usable anymore!");

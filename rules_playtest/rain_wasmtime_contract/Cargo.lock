@@ -783,6 +783,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rain_wasmtime_contract"
+version = "0.1.0"
+dependencies = [
+ "wasmtime-rust",
+]
+
+[[package]]
 name = "raw-cpuid"
 version = "7.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1351,13 +1358,6 @@ dependencies = [
  "wasmtime",
  "wasmtime-runtime",
  "wig",
-]
-
-[[package]]
-name = "wasmtime_contract"
-version = "0.1.0"
-dependencies = [
- "wasmtime-rust",
 ]
 
 [[package]]

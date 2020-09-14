@@ -1,18 +1,22 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use drop::crypto::{self, key::exchange::{Exchanger, PublicKey}, Digest};
+use drop::crypto::{
+    self,
+    key::exchange::{Exchanger, PublicKey},
+    Digest,
+};
 use drop::net::{
-    Connection, DirectoryListener, Listener, ListenerError, TcpConnector,
-    TcpListener, DirectoryInfo, DirectoryConnector,
+    Connection, DirectoryConnector, DirectoryInfo, DirectoryListener, Listener,
+    ListenerError, TcpConnector, TcpListener,
 };
 
 use super::{
     DataTree, RecordID, RecordVal, RuleTransaction, TxRequest, TxResponse,
 };
 
-use super::CoreNodeError;
 use super::history_tree::HistoryTree;
+use super::CoreNodeError;
 
 use futures::future::{self, Either};
 
@@ -83,7 +87,8 @@ impl CoreNode {
 
         let connector = TcpConnector::new(exchanger.clone());
         let dir_listener =
-            DirectoryListener::new(listener, connector, dir_info.addr()).await?;
+            DirectoryListener::new(listener, connector, dir_info.addr())
+                .await?;
 
         let connector = TcpConnector::new(exchanger.clone());
         let mut dir_connector = DirectoryConnector::new(connector);
@@ -96,12 +101,16 @@ impl CoreNode {
             Vec::new()
         };
 
-        let mut h_tree = HistoryTree::new(history_len,
-            crypto::hash(exchanger.keypair().public()).unwrap(), 
-            peers.drain(..).map(|info| crypto::hash(info.public()).unwrap()).collect(),
+        let mut h_tree = HistoryTree::new(
+            history_len,
+            crypto::hash(exchanger.keypair().public()).unwrap(),
+            peers
+                .drain(..)
+                .map(|info| crypto::hash(info.public()).unwrap())
+                .collect(),
         );
 
-        for (k,v) in dt.clone_to_vec().drain(..) {
+        for (k, v) in dt.clone_to_vec().drain(..) {
             h_tree.add_touch(&k);
             h_tree.insert(k, v);
         }
@@ -216,11 +225,10 @@ impl TxRequestHandler {
     }
 
     async fn handle_get_proof(
-        &mut self,
+        guard: tokio::sync::RwLockReadGuard<'_, HTree>,
+        connection: &mut Connection,
         records: Vec<RecordID>,
     ) -> Result<(), CoreNodeError> {
-        let guard = self.data.read().await;
-
         let mut t = guard.get_validator();
         for r in records {
             match guard.get_proof_with_placeholder(&r) {
@@ -231,7 +239,9 @@ impl TxRequestHandler {
             }
         }
 
-        self.connection.send(&TxResponse::GetProof((guard.history_count, t))).await?;
+        connection
+            .send(&TxResponse::GetProof((guard.history_count, t)))
+            .await?;
 
         drop(guard);
 
@@ -239,7 +249,7 @@ impl TxRequestHandler {
     }
 
     async fn handle_execute(
-        &mut self,
+        data: &mut ProtectedTree,
         rt: RuleTransaction,
     ) -> Result<(), CoreNodeError> {
         let used_record_count: usize = rt.merkle_proof.len();
@@ -248,18 +258,19 @@ impl TxRequestHandler {
             return Ok(());
         }
 
-        let mut guard = self.data.write().await;
-        
+        let mut guard = data.write().await;
+
         if rt.touched_records.len() > RECORD_LIMIT {
             error!("Error processing transaction: record limit exceeded. Limit is {}, rule touches {}", RECORD_LIMIT, rt.touched_records.len());
             return Ok(());
-        }            
-
-        if !guard.consistent_given_records(&rt.merkle_proof, &rt.touched_records) {
-            error!("Error processing transaction: invalid merkle proof");
-            return Ok(());            
         }
-        
+
+        if !guard
+            .consistent_given_records(&rt.merkle_proof, &rt.touched_records)
+        {
+            error!("Error processing transaction: invalid merkle proof");
+            return Ok(());
+        }
 
         match rt.merkle_proof.get(&rt.rule_record_id) {
             Err(_) => {
@@ -270,7 +281,7 @@ impl TxRequestHandler {
                 let mut contract = match WasmContract::load_bytes(bytes) {
                     Err(e) => {
                         error!("Error processing transaction: error loading wasi contract: {:?}", e);
-                        return Ok(());  // refactor: change this to Err
+                        return Ok(()); // refactor: change this to Err
                     }
                     Ok(c) => c,
                 };
@@ -280,8 +291,12 @@ impl TxRequestHandler {
                 );
 
                 // removes (k,v) association of rule, for performance
-                let mut input_ledger: Ledger =
-                    rt.merkle_proof.clone_to_vec().into_iter().filter(|(k, _)| k != &rt.rule_record_id).collect();
+                let mut input_ledger: Ledger = rt
+                    .merkle_proof
+                    .clone_to_vec()
+                    .into_iter()
+                    .filter(|(k, _)| k != &rt.rule_record_id)
+                    .collect();
 
                 // Execute the transaction in the wasm runtime
                 let result =
@@ -289,7 +304,7 @@ impl TxRequestHandler {
 
                 // // Execute the transaction in the wasm runtime
                 // let result =
-                //     &self.simulate_transaction(input_ledger.serialize_wasi(), args);                
+                //     &self.simulate_transaction(input_ledger.serialize_wasi(), args);
 
                 // Extract the result
                 let mut output_ledger = match rain_wasi_common::extract_result(
@@ -326,7 +341,7 @@ impl TxRequestHandler {
                 }
 
                 guard.push_history();
-                
+
                 let (overhead, mut tree_size) = guard.memory_usage();
                 if tree_size > bytes.len() {
                     tree_size -= bytes.len();
@@ -349,13 +364,16 @@ impl TxRequestHandler {
         while let Ok(txr) = self.connection.receive::<TxRequest>().await {
             match txr {
                 TxRequest::GetProof(records) => {
-                    info!(
-                        "Received getproof request. Arguments {:?}",
-                        records
-                    );
+                    info!("Received getproof request. Arguments {:?}", records);
 
                     // if self.from_client {
-                    self.handle_get_proof(records.clone()).await?;
+                    let guard = self.data.read().await;
+                    Self::handle_get_proof(
+                        guard,
+                        &mut self.connection,
+                        records.clone(),
+                    )
+                    .await?;
                     // } else {
                     //     error!("TxRequest::GetProof should be sent directly by a client, not via TOB!");
                     // }
@@ -374,7 +392,8 @@ impl TxRequestHandler {
                     // if self.from_client {
                     //     error!("Client attempting to execute directly. TxExecute can only come from TOB!");
                     // } else {
-                    self.handle_execute(rt).await?;
+                    TxRequestHandler::handle_execute(&mut self.data, rt)
+                        .await?;
                     // }
                 }
             }
@@ -500,5 +519,138 @@ mod test {
         .await;
 
         config.tear_down().await;
+    }
+
+    extern crate test;
+    use test::Bencher;
+
+    use super::*;
+
+    fn get_proof_for_records(data: &HTree, records: Vec<RecordID>) -> DataTree {
+        let mut t = data.get_validator();
+        for r in records {
+            match data.get_proof_with_placeholder(&r) {
+                Ok(proof) => {
+                    t.merge(&proof).unwrap();
+                }
+                Err(_) => (),
+            }
+        }
+
+        t
+    }
+
+    fn handle_execute(
+        htree: &mut HTree,
+        rt: &RuleTransaction,
+    ) -> Result<(), CoreNodeError> {
+        let used_record_count: usize = rt.merkle_proof.len();
+        if used_record_count > RECORD_LIMIT {
+            panic!("Error processing transaction: record limit exceeded. Limit is {}, rule touches {}", RECORD_LIMIT, used_record_count);
+        }
+
+        if rt.touched_records.len() > RECORD_LIMIT {
+            panic!("Error processing transaction: record limit exceeded. Limit is {}, rule touches {}", RECORD_LIMIT, rt.touched_records.len());
+        }
+
+        if !htree
+            .consistent_given_records(&rt.merkle_proof, &rt.touched_records)
+        {
+            panic!("Error processing transaction: invalid merkle proof");
+        }
+
+        match rt.merkle_proof.get(&rt.rule_record_id) {
+            Err(_) => {
+                panic!("Error processing transaction: rule is missing from merkle proof");
+            }
+            Ok(bytes) => {
+                let mut contract = match WasmContract::load_bytes(bytes) {
+                    Err(e) => {
+                        panic!("Error processing transaction: error loading wasi contract: {:?}", e);
+                    }
+                    Ok(c) => c,
+                };
+
+                let args = rain_wasi_common::serialize_args_from_byte_vec(
+                    &rt.rule_arguments,
+                );
+
+                // removes (k,v) association of rule, for performance
+                let mut input_ledger: Ledger = rt
+                    .merkle_proof
+                    .clone_to_vec()
+                    .into_iter()
+                    .filter(|(k, _)| k != &rt.rule_record_id)
+                    .collect();
+
+                // Execute the transaction in the wasm runtime
+                let result =
+                    &contract.execute(input_ledger.serialize_wasi(), args);
+
+                // // Execute the transaction in the wasm runtime
+                // let result =
+                //     &self.simulate_transaction(input_ledger.serialize_wasi(), args);
+
+                // Extract the result
+                let _ = match rain_wasi_common::extract_result(result) {
+                    Err(e) => {
+                        panic!("Error processing transaction: contract output an error: {}", e);
+                    }
+                    Ok(l) => l,
+                };
+
+                htree.merge_consistent(&rt.merkle_proof, &rt.touched_records);
+            }
+        }
+
+        Ok(())
+    }
+
+    #[bench]
+    fn bench_handle_execute(b: &mut Bencher) {
+        let filename =
+            "contract_test/target/wasm32-wasi/release/contract_test.wasm";
+        let rule_buffer =
+            std::fs::read(filename).expect("could not load file into buffer");
+
+        let mut t = DataTree::new();
+        let records = [
+            "Alice", "Bob", "Charlie", "Dave", "Aaron", "Vanessa", "Justin",
+            "Irina",
+        ];
+        for &k in records.iter() {
+            t.insert(String::from(k), (1000i32).to_be_bytes().to_vec());
+        }
+        t.insert("transfer_rule".to_string(), rule_buffer);
+
+        let mut h_tree = HistoryTree::new(
+            5,
+            crypto::hash(Exchanger::random().keypair().public()).unwrap(),
+            vec![],
+        );
+
+        for (k, v) in t.clone_to_vec().drain(..) {
+            h_tree.add_touch(&k);
+            h_tree.insert(k, v);
+        }
+        h_tree.push_history();
+
+        let records = vec![
+            "Alice".to_string(),
+            "Bob".to_string(),
+            "transfer_rule".to_string(),
+        ];
+
+        let proof = get_proof_for_records(&h_tree, records.clone());
+        let args = ("Alice".to_string(), "Bob".to_string(), 50i32);
+
+        let rt = RuleTransaction::new(
+            proof,
+            "transfer_rule".to_string(),
+            records,
+            &args,
+        );
+
+        b.iter(|| handle_execute(&mut h_tree, &rt));
     }
 }
