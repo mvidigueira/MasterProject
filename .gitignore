@@ -1,4 +1,3 @@
 target
 .vscode
 wasmtime_test
-wasmtime_test_modern
