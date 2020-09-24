@@ -613,12 +613,10 @@ mod test {
 
         t.insert("transfer_rule".to_string(), rule_buffer);
 
-        let config = SetupConfig::setup(3, t.clone(), 10).await;
+        // Setup a tob which only broadcasts to one of the nodes
+        let config = SetupConfig::setup_asymetric(3, 1, t.clone(), 10).await;
+        let tob_info = &config.tob_info;
         let dir_info = &config.dir_info;
-
-        // Setup a second tob which only broadcasts to one of the nodes
-        let (tob_exit, tob_handle, tob_info) =
-            setup_tob(next_test_ip4(), dir_info, 1).await;
 
         async move {
             let client_node_1 = ClientNode::new(&tob_info, dir_info, 3)
@@ -734,7 +732,6 @@ mod test {
         .await;
 
         config.tear_down().await;
-        wait_for_server(tob_exit, tob_handle).await;
     }
 
     // #[tokio::test]

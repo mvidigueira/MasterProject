@@ -69,11 +69,14 @@ impl SetupConfig {
 
         let tob_addr = next_test_ip4();
 
+        let tob_exchanger = Exchanger::random();
+        let tob_info = DirectoryInfo::from((*tob_exchanger.keypair().public(), tob_addr));
+
         let corenodes = future::join_all((0..nr_peer).map(|_| {
             setup_corenode(
                 next_test_ip4(),
                 &dir_info,
-                tob_addr,
+                &tob_info,
                 nr_peer,
                 dt.clone(),
                 h_len,
@@ -83,7 +86,48 @@ impl SetupConfig {
 
         // must setup tob AFTER corenodes (tob waits for corenodes to join directory)
         let (tob_exit, tob_handle, tob_info) =
-            setup_tob(tob_addr, &dir_info, nr_peer).await;
+            setup_tob(tob_addr, tob_exchanger, &dir_info, nr_peer).await;
+
+        Self {
+            dir_info,
+            dir_exit,
+            dir_handle,
+
+            tob_info,
+            tob_exit,
+            tob_handle,
+
+            corenodes,
+        }
+    }
+
+    pub async fn setup_asymetric(nr_peer_nodes: usize, nr_peer_tob: usize, dt: DataTree, h_len: usize) -> Self {
+        if nr_peer_nodes == 0 {
+            panic!("SetupConfig must be setup with at least 1 core node");
+        }
+
+        let (dir_exit, dir_handle, dir_info) = setup_dir(next_test_ip4()).await;
+
+        let tob_addr = next_test_ip4();
+
+        let tob_exchanger = Exchanger::random();
+        let tob_info = DirectoryInfo::from((*tob_exchanger.keypair().public(), tob_addr));
+
+        let corenodes = future::join_all((0..nr_peer_nodes).map(|_| {
+            setup_corenode(
+                next_test_ip4(),
+                &dir_info,
+                &tob_info,
+                nr_peer_nodes,
+                dt.clone(),
+                h_len,
+            )
+        }))
+        .await;
+
+        // must setup tob AFTER corenodes (tob waits for corenodes to join directory)
+        let (tob_exit, tob_handle, tob_info) =
+            setup_tob(tob_addr, tob_exchanger, &dir_info, nr_peer_tob).await;
 
         Self {
             dir_info,
@@ -110,13 +154,13 @@ impl SetupConfig {
 pub async fn setup_corenode(
     server_addr: SocketAddr,
     dir_info: &DirectoryInfo,
-    tob_addr: SocketAddr,
+    tob_info: &DirectoryInfo,
     nr_peer: usize,
     dt: DataTree,
     h_len: usize,
 ) -> (Sender<()>, JoinHandle<()>, DirectoryInfo) {
     let (core_server, exit_tx) =
-        CoreNode::new(server_addr, dir_info, tob_addr, nr_peer, dt, h_len)
+        CoreNode::new(server_addr, dir_info, tob_info, nr_peer, dt, h_len)
             .await
             .expect("core node creation failed");
 
@@ -154,10 +198,11 @@ pub async fn setup_dir(
 
 pub async fn setup_tob(
     tob_addr: SocketAddr,
+    exchanger: Exchanger,
     dir_info: &DirectoryInfo,
     nr_peer: usize,
 ) -> (Sender<()>, JoinHandle<()>, DirectoryInfo) {
-    let (tob_server, exit_tx) = TobServer::new(tob_addr, dir_info, nr_peer)
+    let (tob_server, exit_tx) = TobServer::new(tob_addr, exchanger, dir_info, nr_peer)
         .await
         .expect("tob server creation failed");
 

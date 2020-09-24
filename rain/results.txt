@@ -1,0 +1,267 @@
+
+running 1 test
+[2mSep 23 17:28:30.726[0m [32m INFO[0m drop::net::connector::tcp: establishing tcp connection to 127.0.0.1:9000
+[2mSep 23 17:28:30.726[0m [32m INFO[0m drop::net::connector::tcp: establishing tcp connection to 127.0.0.1:9000
+[2mSep 23 17:28:30.726[0m [32m INFO[0m drop::net::connector: connected to 127.0.0.1:9000, exchanging keys
+[2mSep 23 17:28:30.726[0m [32m INFO[0m drop::net::listener::tcp: incoming tcp connection from 127.0.0.1:49136
+[2mSep 23 17:28:30.726[0m [32m INFO[0m drop::net: sending public key to peer
+[2mSep 23 17:28:30.726[0m [32m INFO[0m drop::net: waiting for peer's public key
+[2mSep 23 17:28:30.726[0m [32m INFO[0m drop::net::connector::tcp: establishing tcp connection to 127.0.0.1:9000
+[2mSep 23 17:28:30.727[0m [32m INFO[0m drop::net::connector: connected to 127.0.0.1:9000, exchanging keys
+[2mSep 23 17:28:30.727[0m [32m INFO[0m drop::net: sending public key to peer
+[2mSep 23 17:28:30.727[0m [32m INFO[0m drop::net::connector: secure connection established with 127.0.0.1:9000
+[2mSep 23 17:28:30.727[0m [32m INFO[0m drop::net::connector::tcp: establishing tcp connection to 127.0.0.1:9000
+[2mSep 23 17:28:30.727[0m [32m INFO[0m drop::net::listener::directory: connected to directory!
+[2mSep 23 17:28:30.727[0m [32m INFO[0m drop::net::listener::directory: registering with directory server
+[2mSep 23 17:28:30.727[0m [32m INFO[0m drop::net::connector: secure connection established with 127.0.0.1:9000
+[2mSep 23 17:28:30.727[0m [32m INFO[0m drop::net::server::directory: new directory connection from 127.0.0.1:49136
+[2mSep 23 17:28:30.727[0m [32m INFO[0m drop::net::listener::directory: connected to directory!
+[2mSep 23 17:28:30.727[0m [32m INFO[0m drop::net::connector::tcp: establishing tcp connection to 127.0.0.1:9000
+[2mSep 23 17:28:30.727[0m [32m INFO[0m drop::net::server::directory: waiting for next connection
+[2mSep 23 17:28:30.727[0m [32m INFO[0m drop::net::listener::directory: registering with directory server
+[2mSep 23 17:28:30.727[0m [32m INFO[0m drop::net::listener::tcp: incoming tcp connection from 127.0.0.1:49138
+[2mSep 23 17:28:30.727[0m [32m INFO[0m drop::net: waiting for peer's public key
+[2mSep 23 17:28:30.727[0m [32m INFO[0m drop::net::connector: connected to 127.0.0.1:9000, exchanging keys
+[2mSep 23 17:28:30.727[0m [32m INFO[0m drop::net::connector::tcp: establishing tcp connection to 127.0.0.1:9000
+[2mSep 23 17:28:30.727[0m [32m INFO[0m drop::net: sending public key to peer
+[2mSep 23 17:28:30.727[0m [32m INFO[0m drop::net::server::directory: servicing directory request
+[2mSep 23 17:28:30.727[0m [32m INFO[0m drop::net::connector: connected to 127.0.0.1:9000, exchanging keys
+[2mSep 23 17:28:30.727[0m [32m INFO[0m drop::net: sending public key to peer
+[2mSep 23 17:28:30.727[0m [32m INFO[0m drop::net::server::directory: request to add e3aa429194892a73d3c3aa0a29d3fadedf2cb5c30e1ce986e7b75b6f92d89647 at 127.0.0.1:9002
+[2mSep 23 17:28:30.727[0m [32m INFO[0m drop::net::connector: secure connection established with 127.0.0.1:9000
+[2mSep 23 17:28:30.727[0m [33m WARN[0m drop::net::server::directory: no peer is waiting on directory listing
+[2mSep 23 17:28:30.727[0m [32m INFO[0m drop::net::listener::directory: connected to directory!
+[2mSep 23 17:28:30.727[0m [32m INFO[0m drop::net::listener::directory: registering with directory server
+[2mSep 23 17:28:30.727[0m [32m INFO[0m drop::net::listener::directory: renewed lease successfully, next renew in 600 seconds
+[2mSep 23 17:28:30.728[0m [32m INFO[0m drop::net::connector: secure connection established with 127.0.0.1:9000
+[2mSep 23 17:28:30.728[0m [32m INFO[0m drop::net::server::directory: new directory connection from 127.0.0.1:49138
+[2mSep 23 17:28:30.728[0m [32m INFO[0m drop::net::listener::directory: registering with directory server
+[2mSep 23 17:28:30.728[0m [32m INFO[0m drop::net::server::directory: waiting for next connection
+[2mSep 23 17:28:30.728[0m [32m INFO[0m drop::net::listener::tcp: incoming tcp connection from 127.0.0.1:49140
+[2mSep 23 17:28:30.728[0m [32m INFO[0m drop::net::server::directory: request to add e3aa429194892a73d3c3aa0a29d3fadedf2cb5c30e1ce986e7b75b6f92d89647 at 127.0.0.1:9002
+[2mSep 23 17:28:30.728[0m [32m INFO[0m drop::net::connector: connected to 127.0.0.1:9000, exchanging keys
+[2mSep 23 17:28:30.728[0m [32m INFO[0m drop::net: waiting for peer's public key
+[2mSep 23 17:28:30.728[0m [32m INFO[0m drop::net: sending public key to peer
+[2mSep 23 17:28:30.728[0m [33m WARN[0m drop::net::server::directory: no peer is waiting on directory listing
+[2mSep 23 17:28:30.728[0m [32m INFO[0m drop::net::listener::directory: renewed lease successfully, next renew in 600 seconds
+[2mSep 23 17:28:30.728[0m [32m INFO[0m drop::net::server::directory: new directory connection from 127.0.0.1:49140
+[2mSep 23 17:28:30.728[0m [32m INFO[0m drop::net::server::directory: waiting for next connection
+[2mSep 23 17:28:30.728[0m [32m INFO[0m drop::net::server::directory: servicing directory request
+[2mSep 23 17:28:30.728[0m [32m INFO[0m drop::net::connector: secure connection established with 127.0.0.1:9000
+[2mSep 23 17:28:30.728[0m [32m INFO[0m drop::net::listener::tcp: incoming tcp connection from 127.0.0.1:49142
+[2mSep 23 17:28:30.728[0m [32m INFO[0m drop::net: waiting for peer's public key
+[2mSep 23 17:28:30.728[0m [32m INFO[0m drop::net::server::directory: wait request for 3 peers
+[2mSep 23 17:28:30.728[0m [32m INFO[0m drop::net::connector: connected to 127.0.0.1:9000, exchanging keys
+[2mSep 23 17:28:30.728[0m [32m INFO[0m drop::net: sending public key to peer
+[2mSep 23 17:28:30.728[0m [32m INFO[0m drop::net::server::directory: new directory connection from 127.0.0.1:49142
+[2mSep 23 17:28:30.728[0m [32m INFO[0m drop::net::server::directory: waiting for next connection
+[2mSep 23 17:28:30.728[0m [32m INFO[0m drop::net::server::directory: servicing directory request
+[2mSep 23 17:28:30.728[0m [32m INFO[0m drop::net::listener::tcp: incoming tcp connection from 127.0.0.1:49144
+[2mSep 23 17:28:30.728[0m [32m INFO[0m drop::net: waiting for peer's public key
+[2mSep 23 17:28:30.728[0m [32m INFO[0m drop::net::server::directory: request to add bfe806ba94cfcf9436777024b181e7ac8ecccc16bf14295140c6415127aa5204 at 127.0.0.1:9003
+[2mSep 23 17:28:30.728[0m [32m INFO[0m drop::net::connector: secure connection established with 127.0.0.1:9000
+[2mSep 23 17:28:30.729[0m [32m INFO[0m drop::net::listener::directory: renewed lease successfully, next renew in 600 seconds
+[2mSep 23 17:28:30.729[0m [32m INFO[0m drop::net::connector::directory: found peer e3aa429194892a73d3c3aa0a29d3fadedf2cb5c30e1ce986e7b75b6f92d89647 at 127.0.0.1:9002
+[2mSep 23 17:28:30.729[0m [32m INFO[0m drop::net::listener::directory: registering with directory server
+[2mSep 23 17:28:30.729[0m [32m INFO[0m drop::net::connector::directory: found peer bfe806ba94cfcf9436777024b181e7ac8ecccc16bf14295140c6415127aa5204 at 127.0.0.1:9003
+[2mSep 23 17:28:30.729[0m [32m INFO[0m drop::net::server::directory: new directory connection from 127.0.0.1:49144
+[2mSep 23 17:28:30.729[0m [32m INFO[0m drop::net::server::directory: request to add bfe806ba94cfcf9436777024b181e7ac8ecccc16bf14295140c6415127aa5204 at 127.0.0.1:9003
+[2mSep 23 17:28:30.729[0m [32m INFO[0m drop::net::server::directory: waiting for next connection
+[2mSep 23 17:28:30.729[0m [32m INFO[0m drop::net::server::directory: servicing directory request
+[2mSep 23 17:28:30.729[0m [32m INFO[0m drop::net::server::directory: wait request for 3 peers
+[2mSep 23 17:28:30.729[0m [32m INFO[0m drop::net::listener::tcp: incoming tcp connection from 127.0.0.1:49146
+[2mSep 23 17:28:30.729[0m [32m INFO[0m drop::net: waiting for peer's public key
+[2mSep 23 17:28:30.729[0m [32m INFO[0m drop::net::listener::directory: renewed lease successfully, next renew in 600 seconds
+[2mSep 23 17:28:30.729[0m [32m INFO[0m drop::net::connector::directory: found peer bfe806ba94cfcf9436777024b181e7ac8ecccc16bf14295140c6415127aa5204 at 127.0.0.1:9003
+[2mSep 23 17:28:30.729[0m [32m INFO[0m drop::net::connector::directory: got 3 peers from directory
+[2mSep 23 17:28:30.729[0m [32m INFO[0m drop::net::server::directory: wait request complete
+[2mSep 23 17:28:30.729[0m [32m INFO[0m drop::net::connector::directory: end of directory listing
+[2mSep 23 17:28:30.729[0m [32m INFO[0m drop::net::server::directory: new directory connection from 127.0.0.1:49146
+[2mSep 23 17:28:30.729[0m [31mERROR[0m drop::net::connector::directory: no one waiting for response
+[2mSep 23 17:28:30.729[0m [32m INFO[0m drop::net::server::directory: waiting for next connection
+[2mSep 23 17:28:30.729[0m [32m INFO[0m drop::net::server::directory: servicing directory request
+[2mSep 23 17:28:30.729[0m [32m INFO[0m drop::net::server::directory: servicing directory request
+[2mSep 23 17:28:30.729[0m [32m INFO[0m drop::net::server::directory: wait request for 3 peers
+[2mSep 23 17:28:30.729[0m [32m INFO[0m drop::net::server::directory: request to add d64ce5c2eff44b81a071fa81cc3d5d4b6c5159a1d76304094bbe0a54d378f66b at 127.0.0.1:9004
+[2mSep 23 17:28:30.730[0m [32m INFO[0m drop::net::server::directory: wait request complete
+[2mSep 23 17:28:30.730[0m [32m INFO[0m drop::net::listener::directory: renewed lease successfully, next renew in 600 seconds
+[2mSep 23 17:28:30.730[0m [32m INFO[0m drop::net::server::directory: wait request complete
+[2mSep 23 17:28:30.730[0m [32m INFO[0m drop::net::connector::directory: end of directory listing
+[2mSep 23 17:28:30.730[0m [32m INFO[0m drop::net::listener::directory: registering with directory server
+[2mSep 23 17:28:30.730[0m [32m INFO[0m drop::net::connector::directory: end of directory listing
+[2mSep 23 17:28:30.730[0m [32m INFO[0m drop::net::server::directory: request to add d64ce5c2eff44b81a071fa81cc3d5d4b6c5159a1d76304094bbe0a54d378f66b at 127.0.0.1:9004
+[2mSep 23 17:28:30.730[0m [33m WARN[0m drop::net::server::directory: no peer is waiting on directory listing
+[2mSep 23 17:28:30.730[0m [32m INFO[0m drop::net::listener::directory: renewed lease successfully, next renew in 600 seconds
+[2mSep 23 17:28:30.838[0m [32m INFO[0m drop::net::connector::directory: found peer bfe806ba94cfcf9436777024b181e7ac8ecccc16bf14295140c6415127aa5204 at 127.0.0.1:9003
+[2mSep 23 17:28:30.838[0m [32m INFO[0m drop::net::connector::directory: found peer e3aa429194892a73d3c3aa0a29d3fadedf2cb5c30e1ce986e7b75b6f92d89647 at 127.0.0.1:9002
+[2mSep 23 17:28:30.838[0m [32m INFO[0m drop::net::connector::directory: found peer d64ce5c2eff44b81a071fa81cc3d5d4b6c5159a1d76304094bbe0a54d378f66b at 127.0.0.1:9004
+[2mSep 23 17:28:30.838[0m [32m INFO[0m drop::net::connector::directory: got 3 peers from directory
+[2mSep 23 17:28:30.945[0m [32m INFO[0m drop::net::connector::directory: exiting handler
+[2mSep 23 17:28:30.945[0m [32m INFO[0m drop::net::connector::directory: found peer bfe806ba94cfcf9436777024b181e7ac8ecccc16bf14295140c6415127aa5204 at 127.0.0.1:9003
+[2mSep 23 17:28:30.945[0m [32m INFO[0m drop::net::connector::directory: found peer e3aa429194892a73d3c3aa0a29d3fadedf2cb5c30e1ce986e7b75b6f92d89647 at 127.0.0.1:9002
+[2mSep 23 17:28:30.945[0m [32m INFO[0m drop::net::connector::directory: found peer d64ce5c2eff44b81a071fa81cc3d5d4b6c5159a1d76304094bbe0a54d378f66b at 127.0.0.1:9004
+[2mSep 23 17:28:30.945[0m [32m INFO[0m drop::net::connector::directory: got 3 peers from directory
+[2mSep 23 17:28:31.052[0m [32m INFO[0m drop::net::connector::directory: exiting handler
+[2mSep 23 17:28:31.053[0m [32m INFO[0m drop::net::connector::tcp: establishing tcp connection to 127.0.0.1:9000
+[2mSep 23 17:28:31.053[0m [32m INFO[0m drop::net::listener::tcp: incoming tcp connection from 127.0.0.1:49148
+[2mSep 23 17:28:31.053[0m [32m INFO[0m drop::net: waiting for peer's public key
+[2mSep 23 17:28:31.053[0m [32m INFO[0m drop::net::connector: connected to 127.0.0.1:9000, exchanging keys
+[2mSep 23 17:28:31.053[0m [32m INFO[0m drop::net: sending public key to peer
+[2mSep 23 17:28:31.053[0m [32m INFO[0m drop::net::connector: secure connection established with 127.0.0.1:9000
+[2mSep 23 17:28:31.053[0m [32m INFO[0m drop::net::server::directory: new directory connection from 127.0.0.1:49148
+[2mSep 23 17:28:31.053[0m [32m INFO[0m drop::net::server::directory: waiting for next connection
+[2mSep 23 17:28:31.053[0m [32m INFO[0m drop::net::server::directory: servicing directory request
+[2mSep 23 17:28:31.053[0m [32m INFO[0m drop::net::server::directory: wait request for 1 peers
+[2mSep 23 17:28:31.054[0m [32m INFO[0m drop::net::server::directory: wait request complete
+[2mSep 23 17:28:31.054[0m [32m INFO[0m drop::net::connector::directory: found peer d64ce5c2eff44b81a071fa81cc3d5d4b6c5159a1d76304094bbe0a54d378f66b at 127.0.0.1:9004
+[2mSep 23 17:28:31.054[0m [32m INFO[0m drop::net::connector::directory: got 1 peers from directory
+[2mSep 23 17:28:31.054[0m [32m INFO[0m drop::net::connector::directory: end of directory listing
+[2mSep 23 17:28:31.054[0m [31mERROR[0m drop::net::connector::directory: no one waiting for response
+[2mSep 23 17:28:31.054[0m [32m INFO[0m drop::net::connector::tcp: establishing tcp connection to 127.0.0.1:9004
+[2mSep 23 17:28:31.054[0m [32m INFO[0m drop::net::connector: connected to 127.0.0.1:9004, exchanging keys
+[2mSep 23 17:28:31.054[0m [32m INFO[0m drop::net::listener::tcp: incoming tcp connection from 127.0.0.1:58404
+[2mSep 23 17:28:31.054[0m [32m INFO[0m drop::net: sending public key to peer
+[2mSep 23 17:28:31.054[0m [32m INFO[0m drop::net: waiting for peer's public key
+[2mSep 23 17:28:31.055[0m [32m INFO[0m drop::net::connector: secure connection established with 127.0.0.1:9004
+[2mSep 23 17:28:31.055[0m [32m INFO[0m classic::system: connected to d64ce5c2eff44b81a071fa81cc3d5d4b6c5159a1d76304094bbe0a54d378f66b
+[2mSep 23 17:28:31.055[0m [32m INFO[0m classic::broadcast::besteffort: creating best effort broadcast primitive
+[2mSep 23 17:28:31.055[0m [32m INFO[0m rain::core::corenode: new directory connection from TOB server: 127.0.0.1:58404
+[2mSep 23 17:28:31.055[0m [33m WARN[0m classic::broadcast::besteffort: no new peers can be added
+[2mSep 23 17:28:31.055[0m [32m INFO[0m drop::net::connector::tcp: establishing tcp connection to 127.0.0.1:9000
+[2mSep 23 17:28:31.055[0m [32m INFO[0m drop::net::connector: connected to 127.0.0.1:9000, exchanging keys
+[2mSep 23 17:28:31.055[0m [32m INFO[0m drop::net::listener::tcp: incoming tcp connection from 127.0.0.1:49152
+[2mSep 23 17:28:31.055[0m [32m INFO[0m drop::net: sending public key to peer
+[2mSep 23 17:28:31.055[0m [32m INFO[0m drop::net: waiting for peer's public key
+[2mSep 23 17:28:31.056[0m [32m INFO[0m drop::net::connector: secure connection established with 127.0.0.1:9000
+[2mSep 23 17:28:31.056[0m [32m INFO[0m drop::net::server::directory: new directory connection from 127.0.0.1:49152
+[2mSep 23 17:28:31.056[0m [32m INFO[0m drop::net::server::directory: waiting for next connection
+[2mSep 23 17:28:31.056[0m [32m INFO[0m drop::net::server::directory: servicing directory request
+[2mSep 23 17:28:31.056[0m [32m INFO[0m drop::net::server::directory: wait request for 3 peers
+[2mSep 23 17:28:31.056[0m [32m INFO[0m drop::net::server::directory: wait request complete
+[2mSep 23 17:28:31.056[0m [32m INFO[0m drop::net::connector::directory: found peer d64ce5c2eff44b81a071fa81cc3d5d4b6c5159a1d76304094bbe0a54d378f66b at 127.0.0.1:9004
+[2mSep 23 17:28:31.056[0m [32m INFO[0m drop::net::connector::directory: found peer bfe806ba94cfcf9436777024b181e7ac8ecccc16bf14295140c6415127aa5204 at 127.0.0.1:9003
+[2mSep 23 17:28:31.056[0m [32m INFO[0m drop::net::connector::directory: end of directory listing
+[2mSep 23 17:28:31.056[0m [32m INFO[0m drop::net::connector::directory: found peer e3aa429194892a73d3c3aa0a29d3fadedf2cb5c30e1ce986e7b75b6f92d89647 at 127.0.0.1:9002
+[2mSep 23 17:28:31.056[0m [32m INFO[0m drop::net::connector::directory: got 3 peers from directory
+[2mSep 23 17:28:31.056[0m [32m INFO[0m drop::net::connector::directory: exiting handler
+[2mSep 23 17:28:31.057[0m [32m INFO[0m rain::core::client: Closest to Alice is e3aa429194892a73d3c3aa0a29d3fadedf2cb5c30e1ce986e7b75b6f92d89647 at 127.0.0.1:9002
+[2mSep 23 17:28:31.057[0m [32m INFO[0m rain::core::client: Closest to Bob is e3aa429194892a73d3c3aa0a29d3fadedf2cb5c30e1ce986e7b75b6f92d89647 at 127.0.0.1:9002
+[2mSep 23 17:28:31.057[0m [32m INFO[0m rain::core::client: Closest to transfer_rule is e3aa429194892a73d3c3aa0a29d3fadedf2cb5c30e1ce986e7b75b6f92d89647 at 127.0.0.1:9002
+[2mSep 23 17:28:31.057[0m [32m INFO[0m drop::net::connector::tcp: establishing tcp connection to 127.0.0.1:9002
+[2mSep 23 17:28:31.057[0m [32m INFO[0m drop::net::listener::tcp: incoming tcp connection from 127.0.0.1:52802
+[2mSep 23 17:28:31.057[0m [32m INFO[0m drop::net: waiting for peer's public key
+[2mSep 23 17:28:31.057[0m [32m INFO[0m drop::net::connector: connected to 127.0.0.1:9002, exchanging keys
+[2mSep 23 17:28:31.057[0m [32m INFO[0m drop::net: sending public key to peer
+[2mSep 23 17:28:31.057[0m [32m INFO[0m drop::net::connector: secure connection established with 127.0.0.1:9002
+[2mSep 23 17:28:31.057[0m [32m INFO[0m rain::core::corenode: new directory connection from client 127.0.0.1:52802
+[2mSep 23 17:28:31.058[0m [32m INFO[0m rain::core::corenode: Received getproof request. Arguments ["Alice", "Bob", "transfer_rule"]
+[2mSep 23 17:28:31.118[0m [32m INFO[0m rain::core::corenode: Replying to getproof request. Arguments ["Alice", "Bob", "transfer_rule"]
+[2mSep 23 17:28:31.159[0m [32m INFO[0m drop::net::connector::tcp: establishing tcp connection to 127.0.0.1:9001
+[2mSep 23 17:28:31.159[0m [32m INFO[0m drop::net::listener::tcp: incoming tcp connection from 127.0.0.1:38288
+[2mSep 23 17:28:31.159[0m [32m INFO[0m drop::net: waiting for peer's public key
+[2mSep 23 17:28:31.159[0m [32m INFO[0m drop::net::connector: connected to 127.0.0.1:9001, exchanging keys
+[2mSep 23 17:28:31.159[0m [32m INFO[0m drop::net: sending public key to peer
+[2mSep 23 17:28:31.160[0m [32m INFO[0m drop::net::connector: secure connection established with 127.0.0.1:9001
+[2mSep 23 17:28:31.160[0m [32m INFO[0m rain::core::tob_server: new tob connection from client 127.0.0.1:38288
+[2mSep 23 17:28:31.219[0m [32m INFO[0m rain::core::tob_server: Received request "transfer_rule"
+[2mSep 23 17:28:31.278[0m [32m INFO[0m rain::core::corenode: Received execute request. Rule: "transfer_rule"
+[2mSep 23 17:28:32.355[0m [32m INFO[0m drop::net::server::directory: end of directory connection
+[2mSep 23 17:28:32.356[0m [32m INFO[0m drop::net::server::directory: end of directory connection
+[2mSep 23 17:28:32.356[0m [32m INFO[0m rain::core::tob_server: end of TOB connection
+[2mSep 23 17:28:32.357[0m [32m INFO[0m drop::net::server::directory: end of directory connection
+[2mSep 23 17:28:32.358[0m [32m INFO[0m rain::core::corenode: end of client connection
+[2mSep 23 17:28:32.361[0m [32m INFO[0m drop::net::server::directory: end of directory connection
+[2mSep 23 17:28:32.362[0m [32m INFO[0m drop::net::server::directory: end of directory connection
+[2mSep 23 17:28:32.683[0m [32m INFO[0m rain::core::corenode: Transaction applied: local data successfully updated. Overhead: 575, Data: 339
+[2mSep 23 17:28:36.240[0m [32m INFO[0m rain::core::client: Closest to Charlie is e3aa429194892a73d3c3aa0a29d3fadedf2cb5c30e1ce986e7b75b6f92d89647 at 127.0.0.1:9002
+[2mSep 23 17:28:36.240[0m [32m INFO[0m rain::core::client: Closest to Dave is d64ce5c2eff44b81a071fa81cc3d5d4b6c5159a1d76304094bbe0a54d378f66b at 127.0.0.1:9004
+[2mSep 23 17:28:36.241[0m [32m INFO[0m rain::core::client: Closest to transfer_rule is e3aa429194892a73d3c3aa0a29d3fadedf2cb5c30e1ce986e7b75b6f92d89647 at 127.0.0.1:9002
+[2mSep 23 17:28:36.241[0m [32m INFO[0m drop::net::connector::tcp: establishing tcp connection to 127.0.0.1:9002
+[2mSep 23 17:28:36.242[0m [32m INFO[0m drop::net::connector::tcp: establishing tcp connection to 127.0.0.1:9004
+[2mSep 23 17:28:36.242[0m [32m INFO[0m drop::net::listener::tcp: incoming tcp connection from 127.0.0.1:52806
+[2mSep 23 17:28:36.242[0m [32m INFO[0m drop::net::connector: connected to 127.0.0.1:9002, exchanging keys
+[2mSep 23 17:28:36.242[0m [32m INFO[0m drop::net: waiting for peer's public key
+[2mSep 23 17:28:36.242[0m [32m INFO[0m drop::net::listener::tcp: incoming tcp connection from 127.0.0.1:58414
+[2mSep 23 17:28:36.242[0m [32m INFO[0m drop::net: sending public key to peer
+[2mSep 23 17:28:36.243[0m [32m INFO[0m drop::net: waiting for peer's public key
+[2mSep 23 17:28:36.244[0m [32m INFO[0m drop::net::connector: secure connection established with 127.0.0.1:9002
+[2mSep 23 17:28:36.245[0m [32m INFO[0m rain::core::corenode: new directory connection from client 127.0.0.1:52806
+[2mSep 23 17:28:36.245[0m [32m INFO[0m drop::net::connector: connected to 127.0.0.1:9004, exchanging keys
+[2mSep 23 17:28:36.245[0m [32m INFO[0m drop::net: sending public key to peer
+[2mSep 23 17:28:36.245[0m [32m INFO[0m rain::core::corenode: Received getproof request. Arguments ["Charlie", "Dave", "transfer_rule"]
+[2mSep 23 17:28:36.245[0m [32m INFO[0m rain::core::corenode: new directory connection from client 127.0.0.1:58414
+[2mSep 23 17:28:36.245[0m [32m INFO[0m drop::net::connector: secure connection established with 127.0.0.1:9004
+[2mSep 23 17:28:36.246[0m [32m INFO[0m rain::core::corenode: Received getproof request. Arguments ["Charlie", "Dave", "transfer_rule"]
+[2mSep 23 17:28:36.305[0m [32m INFO[0m rain::core::corenode: Replying to getproof request. Arguments ["Charlie", "Dave", "transfer_rule"]
+[2mSep 23 17:28:36.306[0m [32m INFO[0m rain::core::corenode: Replying to getproof request. Arguments ["Charlie", "Dave", "transfer_rule"]
+[2mSep 23 17:28:36.347[0m [32m INFO[0m rain::core::corenode: end of client connection
+[2mSep 23 17:28:36.386[0m [32m INFO[0m drop::net::connector::tcp: establishing tcp connection to 127.0.0.1:9001
+[2mSep 23 17:28:36.386[0m [32m INFO[0m drop::net::listener::tcp: incoming tcp connection from 127.0.0.1:38294
+[2mSep 23 17:28:36.386[0m [32m INFO[0m drop::net::connector: connected to 127.0.0.1:9001, exchanging keys
+[2mSep 23 17:28:36.386[0m [32m INFO[0m drop::net: waiting for peer's public key
+[2mSep 23 17:28:36.386[0m [32m INFO[0m drop::net: sending public key to peer
+[2mSep 23 17:28:36.387[0m [32m INFO[0m rain::core::tob_server: new tob connection from client 127.0.0.1:38294
+[2mSep 23 17:28:36.387[0m [32m INFO[0m drop::net::connector: secure connection established with 127.0.0.1:9001
+[2mSep 23 17:28:36.388[0m [32m INFO[0m rain::core::corenode: end of client connection
+[2mSep 23 17:28:36.445[0m [32m INFO[0m rain::core::tob_server: Received request "transfer_rule"
+[2mSep 23 17:28:36.463[0m [32m INFO[0m rain::core::tob_server: end of TOB connection
+[2mSep 23 17:28:36.497[0m [32m INFO[0m rain::core::corenode: Received execute request. Rule: "transfer_rule"
+[2mSep 23 17:28:37.798[0m [32m INFO[0m rain::core::corenode: Transaction applied: local data successfully updated. Overhead: 631, Data: 339
+[2mSep 23 17:28:41.463[0m [32m INFO[0m rain::core::client: Closest to Aaron is e3aa429194892a73d3c3aa0a29d3fadedf2cb5c30e1ce986e7b75b6f92d89647 at 127.0.0.1:9002
+[2mSep 23 17:28:41.463[0m [32m INFO[0m rain::core::client: Closest to Vanessa is e3aa429194892a73d3c3aa0a29d3fadedf2cb5c30e1ce986e7b75b6f92d89647 at 127.0.0.1:9002
+[2mSep 23 17:28:41.464[0m [32m INFO[0m rain::core::client: Closest to transfer_rule is e3aa429194892a73d3c3aa0a29d3fadedf2cb5c30e1ce986e7b75b6f92d89647 at 127.0.0.1:9002
+[2mSep 23 17:28:41.464[0m [32m INFO[0m drop::net::connector::tcp: establishing tcp connection to 127.0.0.1:9002
+[2mSep 23 17:28:41.465[0m [32m INFO[0m drop::net::connector: connected to 127.0.0.1:9002, exchanging keys
+[2mSep 23 17:28:41.465[0m [32m INFO[0m drop::net::listener::tcp: incoming tcp connection from 127.0.0.1:52812
+[2mSep 23 17:28:41.465[0m [32m INFO[0m drop::net: sending public key to peer
+[2mSep 23 17:28:41.465[0m [32m INFO[0m drop::net: waiting for peer's public key
+[2mSep 23 17:28:41.466[0m [32m INFO[0m drop::net::connector: secure connection established with 127.0.0.1:9002
+[2mSep 23 17:28:41.467[0m [32m INFO[0m rain::core::corenode: new directory connection from client 127.0.0.1:52812
+[2mSep 23 17:28:41.467[0m [32m INFO[0m rain::core::corenode: Received getproof request. Arguments ["Aaron", "Vanessa", "transfer_rule"]
+[2mSep 23 17:28:41.559[0m [32m INFO[0m rain::core::corenode: Replying to getproof request. Arguments ["Aaron", "Vanessa", "transfer_rule"]
+[2mSep 23 17:28:41.601[0m [32m INFO[0m drop::net::connector::tcp: establishing tcp connection to 127.0.0.1:9001
+[2mSep 23 17:28:41.602[0m [32m INFO[0m drop::net::listener::tcp: incoming tcp connection from 127.0.0.1:38298
+[2mSep 23 17:28:41.602[0m [32m INFO[0m drop::net: waiting for peer's public key
+[2mSep 23 17:28:41.602[0m [32m INFO[0m drop::net::connector: connected to 127.0.0.1:9001, exchanging keys
+[2mSep 23 17:28:41.602[0m [32m INFO[0m drop::net: sending public key to peer
+[2mSep 23 17:28:41.602[0m [32m INFO[0m drop::net::connector: secure connection established with 127.0.0.1:9001
+[2mSep 23 17:28:41.602[0m [32m INFO[0m rain::core::tob_server: new tob connection from client 127.0.0.1:38298
+[2mSep 23 17:28:41.603[0m [32m INFO[0m rain::core::corenode: end of client connection
+[2mSep 23 17:28:41.661[0m [32m INFO[0m rain::core::tob_server: Received request "transfer_rule"
+[2mSep 23 17:28:41.679[0m [32m INFO[0m rain::core::tob_server: end of TOB connection
+[2mSep 23 17:28:41.714[0m [32m INFO[0m rain::core::corenode: Received execute request. Rule: "transfer_rule"
+[2mSep 23 17:28:43.029[0m [32m INFO[0m rain::core::corenode: Transaction applied: local data successfully updated. Overhead: 687, Data: 339
+[2mSep 23 17:28:46.680[0m [32m INFO[0m rain::core::client: Closest to Justin is e3aa429194892a73d3c3aa0a29d3fadedf2cb5c30e1ce986e7b75b6f92d89647 at 127.0.0.1:9002
+[2mSep 23 17:28:46.680[0m [32m INFO[0m rain::core::client: Closest to Irina is e3aa429194892a73d3c3aa0a29d3fadedf2cb5c30e1ce986e7b75b6f92d89647 at 127.0.0.1:9002
+[2mSep 23 17:28:46.694[0m [32m INFO[0m rain::core::client: Closest to transfer_rule is e3aa429194892a73d3c3aa0a29d3fadedf2cb5c30e1ce986e7b75b6f92d89647 at 127.0.0.1:9002
+[2mSep 23 17:28:46.694[0m [32m INFO[0m drop::net::connector::tcp: establishing tcp connection to 127.0.0.1:9002
+[2mSep 23 17:28:46.695[0m [32m INFO[0m drop::net::listener::tcp: incoming tcp connection from 127.0.0.1:52816
+[2mSep 23 17:28:46.695[0m [32m INFO[0m drop::net::connector: connected to 127.0.0.1:9002, exchanging keys
+[2mSep 23 17:28:46.695[0m [32m INFO[0m drop::net: waiting for peer's public key
+[2mSep 23 17:28:46.696[0m [32m INFO[0m drop::net: sending public key to peer
+[2mSep 23 17:28:46.697[0m [32m INFO[0m drop::net::connector: secure connection established with 127.0.0.1:9002
+[2mSep 23 17:28:46.697[0m [32m INFO[0m rain::core::corenode: new directory connection from client 127.0.0.1:52816
+[2mSep 23 17:28:46.698[0m [32m INFO[0m rain::core::corenode: Received getproof request. Arguments ["Justin", "Irina", "transfer_rule"]
+[2mSep 23 17:28:46.739[0m [32m INFO[0m rain::core::corenode: Replying to getproof request. Arguments ["Justin", "Irina", "transfer_rule"]
+[2mSep 23 17:28:46.779[0m [32m INFO[0m drop::net::connector::tcp: establishing tcp connection to 127.0.0.1:9001
+[2mSep 23 17:28:46.780[0m [32m INFO[0m drop::net::listener::tcp: incoming tcp connection from 127.0.0.1:38302
+[2mSep 23 17:28:46.780[0m [32m INFO[0m drop::net::connector: connected to 127.0.0.1:9001, exchanging keys
+[2mSep 23 17:28:46.780[0m [32m INFO[0m drop::net: waiting for peer's public key
+[2mSep 23 17:28:46.780[0m [32m INFO[0m drop::net: sending public key to peer
+[2mSep 23 17:28:46.780[0m [32m INFO[0m drop::net::connector: secure connection established with 127.0.0.1:9001
+[2mSep 23 17:28:46.780[0m [32m INFO[0m rain::core::tob_server: new tob connection from client 127.0.0.1:38302
+[2mSep 23 17:28:46.781[0m [32m INFO[0m rain::core::corenode: end of client connection
+[2mSep 23 17:28:46.838[0m [32m INFO[0m rain::core::tob_server: Received request "transfer_rule"
+[2mSep 23 17:28:46.856[0m [32m INFO[0m rain::core::corenode: directory server exiting...
+[2mSep 23 17:28:46.856[0m [32m INFO[0m rain::core::corenode: directory server exiting...
+[2mSep 23 17:28:46.856[0m [32m INFO[0m rain::core::corenode: directory server exiting...
+[2mSep 23 17:28:46.856[0m [32m INFO[0m rain::core::tob_server: directory server exiting...
+[2mSep 23 17:28:46.857[0m [32m INFO[0m drop::net::server::directory: directory server exiting...
+[2mSep 23 17:28:46.857[0m [32m INFO[0m rain::core::tob_server: end of TOB connection
+[2mSep 23 17:28:46.893[0m [32m INFO[0m rain::core::corenode: Received execute request. Rule: "transfer_rule"
+[2mSep 23 17:28:48.188[0m [32m INFO[0m rain::core::corenode: Transaction applied: local data successfully updated. Overhead: 743, Data: 339
+[2mSep 23 17:28:48.191[0m [32m INFO[0m rain::core::corenode: end of client connection
+test core::client::test::mixed_get_proofs ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out
+

@@ -63,6 +63,7 @@ type ProtectedTree = Arc<RwLock<HTree>>;
 pub struct CoreNode {
     dir_listener: DirectoryListener,
     tob_addr: SocketAddr,
+    tob_pub_key: PublicKey,
     exit: Receiver<()>,
 
     data: ProtectedTree,
@@ -72,7 +73,7 @@ impl CoreNode {
     pub async fn new(
         node_addr: SocketAddr,
         dir_info: &DirectoryInfo,
-        tob_addr: SocketAddr,
+        tob_info: &DirectoryInfo,
         nr_peer: usize,
         dt: DataTree,
         history_len: usize,
@@ -119,7 +120,8 @@ impl CoreNode {
         let ret = (
             Self {
                 dir_listener: dir_listener,
-                tob_addr: tob_addr,
+                tob_addr: tob_info.addr(),
+                tob_pub_key: *tob_info.public(),
                 exit: rx,
 
                 data: Arc::from(RwLock::new(h_tree)),
@@ -155,10 +157,12 @@ impl CoreNode {
             exit_fut = Some(exit);
 
             let peer_addr = connection.peer_addr()?;
+            let peer_pub = connection.remote_key();
+            // info!("Peer pub: {:?}. TOB pub {:?}", peer_pub, self.tob_pub_key);
 
             let data = self.data.clone();
 
-            if peer_addr == self.tob_addr {
+            if peer_pub == Some(self.tob_pub_key) {
                 info!(
                     "new directory connection from TOB server: {}",
                     peer_addr
@@ -426,11 +430,13 @@ mod test {
         let (exit_dir, handle_dir, dir_info) = setup_dir(next_test_ip4()).await;
 
         let fake_tob_addr = next_test_ip4();
+        let exchanger = Exchanger::random();
+        let fake_tob_info = DirectoryInfo::from((*exchanger.keypair().public(), fake_tob_addr));
 
         let (exit_tx, handle, _) = setup_corenode(
             next_test_ip4(),
             &dir_info,
-            fake_tob_addr,
+            &fake_tob_info,
             1,
             DataTree::new(),
             10,
@@ -576,7 +582,7 @@ mod test {
                 );
 
                 // removes (k,v) association of rule, for performance
-                let mut input_ledger: Ledger = rt
+                let input_ledger: Ledger = rt
                     .merkle_proof
                     .clone_to_vec()
                     .into_iter()

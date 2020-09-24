@@ -32,12 +32,11 @@ pub struct TobServer {
 impl TobServer {
     pub async fn new(
         tob_addr: SocketAddr,
+        exchanger: Exchanger,
         dir_info: &DirectoryInfo,
         nr_peer: usize,
     ) -> Result<(Self, Sender<()>), TobServerError> {
         let (tx, rx) = channel();
-
-        let exchanger = Exchanger::random();
 
         let listener = TcpListener::new(tob_addr, exchanger.clone())
             .await
@@ -219,6 +218,7 @@ mod test {
 
     use tracing::trace_span;
     use tracing_futures::Instrument;
+    use drop::crypto::key::exchange::Exchanger;
 
     #[tokio::test]
     async fn tob_shutdown() {
@@ -226,7 +226,7 @@ mod test {
 
         let (exit_dir, handle_dir, dir_info) = setup_dir(next_test_ip4()).await;
         let (exit_tob, handle_tob, _) =
-            setup_tob(next_test_ip4(), &dir_info, 0).await;
+            setup_tob(next_test_ip4(), Exchanger::random(), &dir_info, 0).await;
 
         wait_for_server(exit_tob, handle_tob).await;
         wait_for_server(exit_dir, handle_dir).await;

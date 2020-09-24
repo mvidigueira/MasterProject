@@ -228,21 +228,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "wasm_common_bindings"
-version = "0.1.0"
-dependencies = [
- "bincode",
- "serde",
-]
-
-[[package]]
-name = "wasm_interpretation_tests"
+name = "wasm3_interpretation_tests"
 version = "0.1.0"
 dependencies = [
  "bincode",
  "tester",
  "wasm3",
  "wasm_common_bindings",
+]
+
+[[package]]
+name = "wasm_common_bindings"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "serde",
 ]
 
 [[package]]
