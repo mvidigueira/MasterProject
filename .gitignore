@@ -1,5 +1,5 @@
 target
 .vscode
 wasmtime_test
-.code-workspace
+sem_project.code-workspace
 
