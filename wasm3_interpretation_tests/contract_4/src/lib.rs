@@ -2,10 +2,12 @@
 
 use std::collections::HashMap;
 
+use drop::crypto::sign::{PublicKey, Signature, Signer};
+
 use wasm_common_bindings::{Ledger, Args};
 use bincode;
 
-pub type ContextLedger = HashMap<String, i32>;
+pub type ContextLedger = HashMap<String, (i32, (PublicKey, i32))>;
 
 #[no_mangle]
 pub extern "C" fn allocate_vec(length: i32) -> *mut u8 {

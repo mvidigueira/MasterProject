@@ -1,5 +1,5 @@
 [package]
-name = "contract_test"
+name = "contract_test_2"
 version = "0.1.0"
 authors = ["mvidigueira <mvidigueira@gmail.com>"]
 edition = "2018"
@@ -15,5 +15,6 @@ debug = true
 
 [dependencies]
 wasm_common_bindings = { path="../common" }
-bincode = "1.2.1"
+drop = { git = "https://github.com/Distributed-EPFL/drop", branch = "feature/io" }
+bincode = "=1.2.1"
 
