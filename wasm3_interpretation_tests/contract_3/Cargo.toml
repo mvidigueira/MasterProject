@@ -15,5 +15,5 @@ debug = true
 
 [dependencies]
 wasm_common_bindings = { path="../common" }
-bincode = "1.2.1"
+bincode = "=1.2.1"
 

@@ -1,5 +1,3 @@
-#![feature(vec_into_raw_parts)]
-
 use std::collections::HashMap;
 
 use ed25519_dalek::{PublicKey, Signature, Verifier};
@@ -8,14 +6,12 @@ use bincode;
 
 pub type ContextLedger = HashMap<String, (i32, (PublicKey, i32))>;
 
-#[no_mangle]
-pub extern "C" fn allocate_vec(length: i32) -> *mut u8 {
+pub fn allocate_vec_sim(length: i32) -> *mut u8 {
     let v = Vec::with_capacity(length as usize);
     v.into_raw_parts().0
 }
 
-#[no_mangle]
-pub extern "C" fn execute(ptr: *mut u8, length: i32) -> *mut u8 {
+pub fn execute_sim(ptr: *mut u8, length: i32) -> Ledger {
     let (l, args) = parse_input(ptr, length);
     let mut cl = to_context_ledger(l);
 
@@ -33,7 +29,7 @@ pub extern "C" fn execute(ptr: *mut u8, length: i32) -> *mut u8 {
     }
 
     let l = to_ledger(cl);
-    return make_result(l);
+    l
 }
 
 // HELPERS
@@ -44,14 +40,6 @@ fn parse_input(ptr: *mut u8, length: i32) -> (Ledger, Args) {
     };
 
     wasm_common_bindings::get_input(v)
-}
-
-fn make_result(l: Ledger) -> *mut u8 {
-    let (ptr, len, _) = wasm_common_bindings::create_result(l).into_raw_parts();
-
-    [(len as i32).to_be_bytes(), (ptr as i32).to_be_bytes()]
-    .concat()
-    .as_mut_ptr()
 }
 
 pub fn to_context_ledger(l: Ledger) -> ContextLedger {

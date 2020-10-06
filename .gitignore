@@ -1,5 +1,4 @@
 target
 .vscode
-wasmtime_test
 sem_project.code-workspace
 

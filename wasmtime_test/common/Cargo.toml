@@ -6,8 +6,6 @@ edition = "2018"
 
 [dependencies]
 bincode = "=1.2.1"
-# sodiumoxide = "0.2.6"
-# sodiumoxide = { git = 'https://github.com/alexcrichton/sodiumoxide', branch = 'wasm32' }
 serde = { version = "1.0"}
 
 [dependencies.ed25519-dalek]

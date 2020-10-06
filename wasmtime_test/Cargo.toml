@@ -1,32 +1,28 @@
 [package]
-name = "wasm3_interpretation_tests"
+name = "wasmtime_test"
 version = "0.1.0"
 authors = ["mribeiro"]
 edition = "2018"
 
 [lib]
-name = "wasm3_interpretation_lib"
+name = "wasmtime_runtime_holder"
 path = "src/lib.rs"
-
-[[bin]]
-name = "perf_test"
-path = "src/main.rs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-[profile.release]
-debug = true
-
-[profile.bench]
-opt-level = 3
-
 [dependencies]
-tester = "0.7.0"
-wasm3 = "0.1.1"
-wasm_common_bindings = { path="common" }
 bincode = "=1.2.1"
+wasm_common_bindings = { path="common" }
+tester = "0.7.0"
+serde = "1.0"
 rand = "0.7.3"
+tokio = { version = "0.2.4", features = ["full"] }
+futures = "0.3.6"
 
 [dependencies.ed25519-dalek]
 version = "1.0.1"
 features = ["serde"]
+
+[dependencies.wasmtime]
+version = "0.20.0"
+features = ["lightbeam"]

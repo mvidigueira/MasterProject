@@ -1,4 +1,4 @@
-#![feature(vec_into_raw_parts)]
+ #![feature(vec_into_raw_parts)]
 
 use std::collections::HashMap;
 
@@ -71,6 +71,7 @@ pub fn to_ledger(cl: ContextLedger) -> Ledger {
     }
     l
 }
+
 fn deserialize_args(v: Vec<u8>) -> (String, String, i32, Signature) {
     bincode::deserialize(&v).unwrap()
 }
