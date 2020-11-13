@@ -144,8 +144,10 @@ where
     pub history_count: usize,
     history_len: usize,
 
-    my_d: Digest,
-    pub d_list: Vec<Digest>,
+    // my_d: Digest,
+    // pub d_list: Vec<Digest>,
+
+    pub prefix_list: Vec<Prefix>,
 }
 
 impl<K, V> HistoryTree<K, V>
@@ -155,14 +157,13 @@ where
 {
     pub fn new(
         history_len: usize,
-        my_d: Digest,
-        mut d_list: Vec<Digest>,
+        mut prefix_list: Vec<Prefix>,
     ) -> Self {
         if history_len < 1 {
             panic!("history_len must be at least 1");
         }
 
-        d_list.sort_by_key(|x| *x.as_ref());
+        prefix_list.sort();
 
         let mut touches = VecDeque::with_capacity(history_len + 1);
         touches.push_front(vec![]);
@@ -175,8 +176,7 @@ where
             history_count: 0,
             history_len: history_len,
 
-            my_d: my_d,
-            d_list: d_list,
+            prefix_list: prefix_list,
         }
     }
 
@@ -430,18 +430,29 @@ where
     }
 
     fn pop_touches(&mut self) {
-        let d_list = &self.d_list;
-        let my_d = self.my_d.as_ref();
+        let prefix_list = &self.prefix_list;
 
         let is_close = move |path: [u8; 32], up_to_bit: usize| {
-            let closest_d = closest(d_list, &path);
-            let closest_score = std::cmp::min(
-                leading_bits_in_common(closest_d.as_ref(), &path),
-                up_to_bit,
-            );
+            let mut len = up_to_bit / 8;
+            let remainder = up_to_bit % 8;
+            if remainder > 0 {
+                len += 1;
+            }
 
-            std::cmp::min(leading_bits_in_common(my_d, &path), up_to_bit)
-                == closest_score
+            let target = &Prefix::new(path[0..len].to_vec(), remainder as u8);
+            // Not optimized yet
+            // Binary search and comparison with left and right elements should work
+            // but must verify first that it is theoretically correct
+            // because is_close is true if there is p such that
+            // p.includes(target) OR target.includes(p) 
+            // (emphasis on the second part)
+            for p in prefix_list {
+                if p.includes(target) || target.includes(p) {
+                    return true
+                }
+            }
+
+            false
         };
 
         let touched_records = self.touches.pop_back().unwrap();
@@ -449,7 +460,7 @@ where
         let last_recent_history =
             std::cmp::max(self.history_count + 1 - self.history_len, 0);
         for k in touched_records {
-            if self.d_list.len() > 0 {
+            if self.prefix_list.len() > 0 {
                 self.tree.replace_with_placeholder(
                     k.as_ref(),
                     last_recent_history,
