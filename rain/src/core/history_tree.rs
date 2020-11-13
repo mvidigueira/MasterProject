@@ -14,7 +14,122 @@ use std::sync::Arc;
 
 use tracing::error;
 
+use std::convert::TryFrom;
 use std::fmt::Debug;
+
+#[derive(PartialEq, Eq)]
+pub struct Prefix {
+    key: Vec<u8>,
+    remainder: u8, // total length of prefix = [key.size()-1] * 8 + remainder bits
+}
+
+impl Prefix {
+    pub fn new(key: Vec<u8>, remainder: u8) -> Self {
+        Prefix{key, remainder}
+    }
+
+    pub fn includes(&self, other: &Self) -> bool {
+        // Compare full bytes
+        let full_byte_count = std::cmp::min(self.key.len(), other.key.len());
+        if full_byte_count > 0 {
+            match self.key[0..full_byte_count].cmp(&other.key[0..full_byte_count]) {
+                std::cmp::Ordering::Equal => (),
+                _ => return false,
+            }
+        }
+
+        // Compare last incomplete byte
+        let min_remainder = std::cmp::min(self.remainder, other.remainder);
+        if min_remainder > 0 {
+            let (byte_a, byte_b) = (self.key[full_byte_count], other.key[full_byte_count]);
+            let byte_a = (byte_a >> (8-min_remainder)) << (8-min_remainder);
+            let byte_b = (byte_b >> (8-min_remainder)) << (8-min_remainder);
+            if full_byte_count > 0 {
+                match byte_a.cmp(&byte_b) {
+                    std::cmp::Ordering::Equal => (),
+                    _ => return false,
+                }
+            }
+        }
+
+        return self.remainder <= other.remainder
+    }
+}
+
+pub fn set_bit(v: &mut Vec<u8>, index: usize, value: bool) {
+    if value {
+        let sub_index: u8 = 1 << (7 - (index % 8));
+        v[(index / 8) as usize] |= sub_index;
+    } else {
+        let sub_index: u8 = 1 << (7 - (index % 8));
+        v[(index / 8) as usize] &= !sub_index;
+    }
+}
+
+impl TryFrom<String> for Prefix {
+    type Error = ();
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        if s.len() < 1 || s.len() > 256 {
+            return Err(());
+        }
+
+        let mut num_bytes = s.len() / 8;
+        let remainder = (s.len() % 8) as u8;
+        if remainder > 0 {
+            num_bytes += 1
+        }
+
+        let mut v: Vec<u8> = vec![0; num_bytes];
+        for (i, c) in s.chars().enumerate() {
+            if c == '0' {
+                ()
+            } else if c == '1' {
+                set_bit(&mut v, i, true);
+            } else {
+                return Err(())
+            }
+        }
+
+        Ok(Prefix::new(v, remainder))
+    }
+}
+
+impl Ord for Prefix {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Compare full bytes
+        let full_byte_count = std::cmp::min(self.key.len(), other.key.len());
+        if full_byte_count > 0 {
+            match self.key[0..full_byte_count].cmp(&other.key[0..full_byte_count]) {
+                std::cmp::Ordering::Equal => (),
+                other => return other,
+            }
+        }
+
+        // Compare last incomplete byte
+        let min_remainder = std::cmp::min(self.remainder, other.remainder);
+        if min_remainder > 0 {
+            let (byte_a, byte_b) = (self.key[full_byte_count], other.key[full_byte_count]);
+            let byte_a = (byte_a >> (8-min_remainder)) << (8-min_remainder);
+            let byte_b = (byte_b >> (8-min_remainder)) << (8-min_remainder);
+            if full_byte_count > 0 {
+                match byte_a.cmp(&byte_b) {
+                    std::cmp::Ordering::Equal => (),
+                    other => return other,
+                }
+            }
+        }
+
+        // Compare bitlength
+        self.remainder.cmp(&other.remainder)
+    }
+}
+
+impl PartialOrd for Prefix {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
 
 pub struct HistoryTree<K, V>
 where
