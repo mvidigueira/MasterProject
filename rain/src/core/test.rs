@@ -1,7 +1,7 @@
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicU16, Ordering};
 
-use super::{CoreNode, DataTree, RuleTransaction, TobServer};
+use super::{CoreNode, DataTree, RuleTransaction, TobServer, Prefix};
 
 use drop::crypto::key::exchange::Exchanger;
 use drop::net::{
@@ -60,7 +60,9 @@ pub struct SetupConfig {
 }
 
 impl SetupConfig {
-    pub async fn setup(nr_peer: usize, dt: DataTree, h_len: usize) -> Self {
+    pub async fn setup<I: Into<Prefix>>(mut prefix_lists: Vec<Vec<I>>, dt: DataTree, h_len: usize) -> Self {
+        let nr_peer = prefix_lists.len();
+
         if nr_peer == 0 {
             panic!("SetupConfig must be setup with at least 1 core node");
         }
@@ -72,14 +74,14 @@ impl SetupConfig {
         let tob_exchanger = Exchanger::random();
         let tob_info = DirectoryInfo::from((*tob_exchanger.keypair().public(), tob_addr));
 
-        let corenodes = future::join_all((0..nr_peer).map(|_| {
+        let corenodes = future::join_all(prefix_lists.drain(..).map(|p_list| {
             setup_corenode(
                 next_test_ip4(),
                 &dir_info,
                 &tob_info,
-                nr_peer,
                 dt.clone(),
                 h_len,
+                p_list,
             )
         }))
         .await;
@@ -101,7 +103,9 @@ impl SetupConfig {
         }
     }
 
-    pub async fn setup_asymetric(nr_peer_nodes: usize, nr_peer_tob: usize, dt: DataTree, h_len: usize) -> Self {
+    pub async fn setup_asymetric<I: Into<Prefix>>(mut prefix_lists: Vec<Vec<I>>, nr_peer_tob: usize, dt: DataTree, h_len: usize) -> Self {
+        let nr_peer_nodes = prefix_lists.len();
+        
         if nr_peer_nodes == 0 {
             panic!("SetupConfig must be setup with at least 1 core node");
         }
@@ -113,14 +117,14 @@ impl SetupConfig {
         let tob_exchanger = Exchanger::random();
         let tob_info = DirectoryInfo::from((*tob_exchanger.keypair().public(), tob_addr));
 
-        let corenodes = future::join_all((0..nr_peer_nodes).map(|_| {
+        let corenodes = future::join_all(prefix_lists.drain(..).map(|p_list| {
             setup_corenode(
                 next_test_ip4(),
                 &dir_info,
                 &tob_info,
-                nr_peer_nodes,
                 dt.clone(),
                 h_len,
+                p_list,
             )
         }))
         .await;
@@ -151,16 +155,17 @@ impl SetupConfig {
     }
 }
 
-pub async fn setup_corenode(
+pub async fn setup_corenode<I: Into<Prefix>>(
     server_addr: SocketAddr,
     dir_info: &DirectoryInfo,
     tob_info: &DirectoryInfo,
-    nr_peer: usize,
     dt: DataTree,
     h_len: usize,
+    mut prefix_list: Vec<I>,
 ) -> (Sender<()>, JoinHandle<()>, DirectoryInfo) {
     let (core_server, exit_tx) =
-        CoreNode::new(server_addr, dir_info, tob_info, nr_peer, dt, h_len)
+        CoreNode::new(server_addr, dir_info, tob_info, dt, h_len, 
+            prefix_list.drain(..).map(|x| x.into()).collect())
             .await
             .expect("core node creation failed");
 
@@ -235,10 +240,32 @@ pub async fn create_peer_and_connect(target: &DirectoryInfo) -> Connection {
     connection
 }
 
+pub fn get_balanced_prefixes(n: usize) -> Vec<Vec<Prefix>> {
+    let log2 = (std::mem::size_of::<usize>() * 8) as u32 - n.leading_zeros() - 1;
+    let pow2 =  (2 as usize).pow(log2);
+    let r = n - pow2;
+    let z = pow2 - 2*r; 
+
+    let mut list: Vec<Vec<Prefix>> = vec!();
+    let mut base = Prefix::new(vec!(0), 0);
+    base.set_length_in_bits(log2 as usize);
+    for _ in 0..z {
+        list.push(vec!(base.clone()));
+        base.increment();
+    }
+    base.set_length_in_bits(log2 as usize + 1);
+    for _ in 0..2*r {
+        list.push(vec!(base.clone()));
+        base.increment();
+    }
+
+    list
+}
+
 #[tokio::test]
 async fn config_setup_teardown() {
     init_logger();
 
-    let config = SetupConfig::setup(5, DataTree::new(), 1).await;
+    let config = SetupConfig::setup(vec!(vec!("0"), vec!("0"), vec!("0"), vec!("0"), vec!("0")), DataTree::new(), 1).await;
     config.tear_down().await;
 }

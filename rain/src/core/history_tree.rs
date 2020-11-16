@@ -1,5 +1,5 @@
 use merkle::error::MerkleError;
-use merkle::{closest, leading_bits_in_common, Tree};
+use merkle::Tree;
 
 use std::borrow::Borrow;
 use std::collections::VecDeque;
@@ -14,10 +14,11 @@ use std::sync::Arc;
 
 use tracing::error;
 
-use std::convert::TryFrom;
 use std::fmt::Debug;
+use std::num::Wrapping;
 
-#[derive(PartialEq, Eq)]
+// Empty prefix includes all
+#[derive(PartialEq, Eq, Clone, Debug)]
 pub struct Prefix {
     key: Vec<u8>,
     remainder: u8, // total length of prefix = [key.size()-1] * 8 + remainder bits
@@ -26,6 +27,34 @@ pub struct Prefix {
 impl Prefix {
     pub fn new(key: Vec<u8>, remainder: u8) -> Self {
         Prefix{key, remainder}
+    }
+
+    pub fn increment(&mut self) {
+        let s = self.key.len();
+        if s == 0 {
+            // Cannot increment empty prefix
+            return;
+        }
+        self.key[s-1] = (Wrapping(self.key[s-1]) + Wrapping((2 as u8).pow((7 - self.remainder) as u32))).0;
+        for i in (1..s).rev() {
+            if self.key[i] == 0 {
+                self.key[i-1] = (Wrapping(self.key[i-1]) + Wrapping(1)).0;
+            } else {
+                break;
+            }   
+        }
+    }
+
+    pub fn set_length_in_bits(&mut self, length: usize) {
+        let mut s = length / 8;
+        let remainder = length % 8;
+        if remainder > 0 {
+            s+=1;
+        }
+        self.key.resize(s, 0);
+        if s > 0 && remainder > 0 {
+            self.key[s-1] &= u8::MAX << (8-remainder);
+        }
     }
 
     pub fn includes(&self, other: &Self) -> bool {
@@ -66,12 +95,10 @@ pub fn set_bit(v: &mut Vec<u8>, index: usize, value: bool) {
     }
 }
 
-impl TryFrom<String> for Prefix {
-    type Error = ();
-
-    fn try_from(s: String) -> Result<Self, Self::Error> {
-        if s.len() < 1 || s.len() > 256 {
-            return Err(());
+impl From<&str> for Prefix {
+    fn from(s: &str) -> Self {
+        if s.len() > 256 {
+            panic!("Prefix must have length between 0 and 256");
         }
 
         let mut num_bytes = s.len() / 8;
@@ -87,11 +114,11 @@ impl TryFrom<String> for Prefix {
             } else if c == '1' {
                 set_bit(&mut v, i, true);
             } else {
-                return Err(())
+                panic!("String must only contain chars 0 and 1");
             }
         }
 
-        Ok(Prefix::new(v, remainder))
+        Prefix::new(v, remainder)
     }
 }
 
@@ -143,9 +170,6 @@ where
     pub history: VecDeque<Digest>,
     pub history_count: usize,
     history_len: usize,
-
-    // my_d: Digest,
-    // pub d_list: Vec<Digest>,
 
     pub prefix_list: Vec<Prefix>,
 }
@@ -511,7 +535,6 @@ pub type Validator<K, V> = Tree<K, V>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use merkle::closest;
 
     use std::convert::TryFrom;
     macro_rules! h2d {
@@ -522,10 +545,7 @@ mod tests {
 
     #[test]
     fn consistent_inserts_1() {
-        let unused = h2d!(
-            "0000000000000000000000000000000000000000000000000000000000000000"
-        );
-        let mut h_tree = HistoryTree::new(10, unused, vec![]);
+        let mut h_tree = HistoryTree::new(10, vec![]);
 
         h_tree.insert("Alice", 1);
         h_tree.push_history();
@@ -543,10 +563,7 @@ mod tests {
 
     #[test]
     fn consistent_inserts_2() {
-        let unused = h2d!(
-            "0000000000000000000000000000000000000000000000000000000000000000"
-        );
-        let mut h_tree = HistoryTree::new(10, unused, vec![]);
+        let mut h_tree = HistoryTree::new(10, vec![]);
 
         h_tree.insert("Alice", 1);
         h_tree.push_history();
@@ -566,10 +583,7 @@ mod tests {
 
     #[test]
     fn consistent_was_removed() {
-        let unused = h2d!(
-            "0000000000000000000000000000000000000000000000000000000000000000"
-        );
-        let mut h_tree = HistoryTree::new(10, unused, vec![]);
+        let mut h_tree = HistoryTree::new(10, vec![]);
 
         h_tree.insert("Alice", 1);
         h_tree.push_history();
@@ -584,10 +598,7 @@ mod tests {
 
     #[test]
     fn consistent_was_replaced_with_placeholder_1() {
-        let unused = h2d!(
-            "0000000000000000000000000000000000000000000000000000000000000000"
-        );
-        let mut h_tree = HistoryTree::new(10, unused, vec![]);
+        let mut h_tree = HistoryTree::new(10, vec![]);
 
         h_tree.insert("Bob", 1);
         h_tree.push_history();
@@ -610,10 +621,7 @@ mod tests {
 
     #[test]
     fn consistent_was_replaced_with_placeholder_2() {
-        let unused = h2d!(
-            "0000000000000000000000000000000000000000000000000000000000000000"
-        );
-        let mut h_tree = HistoryTree::new(10, unused, vec![]);
+        let mut h_tree = HistoryTree::new(10, vec![]);
 
         h_tree.insert("Bob", 1);
         h_tree.push_history();
@@ -636,10 +644,7 @@ mod tests {
 
     #[test]
     fn consistent_new_inserts_1() {
-        let unused = h2d!(
-            "0000000000000000000000000000000000000000000000000000000000000000"
-        );
-        let mut h_tree = HistoryTree::new(10, unused, vec![]);
+        let mut h_tree = HistoryTree::new(10, vec![]);
 
         h_tree.insert("Bob", 1);
         h_tree.push_history();
@@ -662,10 +667,7 @@ mod tests {
 
     #[test]
     fn consistent_new_inserts_2() {
-        let unused = h2d!(
-            "0000000000000000000000000000000000000000000000000000000000000000"
-        );
-        let mut h_tree = HistoryTree::new(10, unused, vec![]);
+        let mut h_tree = HistoryTree::new(10, vec![]);
 
         h_tree.insert("Bob", 1);
         h_tree.push_history();
@@ -691,10 +693,7 @@ mod tests {
 
     #[test]
     fn merge_consistent_1() {
-        let unused = h2d!(
-            "0000000000000000000000000000000000000000000000000000000000000000"
-        );
-        let mut h_tree = HistoryTree::new(10, unused, vec![]);
+        let mut h_tree = HistoryTree::new(10, vec![]);
 
         h_tree.insert("Aaron", 1);
         h_tree.insert("Charlie", 2);
@@ -725,10 +724,7 @@ mod tests {
 
     #[test]
     fn merge_consistent_new_inserts() {
-        let unused = h2d!(
-            "0000000000000000000000000000000000000000000000000000000000000000"
-        );
-        let mut h_tree = HistoryTree::new(10, unused, vec![]);
+        let mut h_tree = HistoryTree::new(10, vec![]);
 
         h_tree.insert("Bob", 1); // L, R, ...
 
@@ -765,10 +761,7 @@ mod tests {
 
     #[test]
     fn push_history_1() {
-        let unused = h2d!(
-            "0000000000000000000000000000000000000000000000000000000000000000"
-        );
-        let mut h_tree = HistoryTree::new(2, unused, vec![]);
+        let mut h_tree = HistoryTree::new(2, vec![]);
 
         h_tree.insert("Bob", 1); // L, R, ...
         h_tree.add_touch(&"Bob");
@@ -795,18 +788,13 @@ mod tests {
     }
 
     #[test]
+    fn test_prefix() {
+        print!("{}", drop::crypto::hash(&"Vanessa").unwrap());
+    }
+
+    #[test]
     fn push_history_2() {
-        let me = h2d!(
-            "6F00000000000000000000000000000000000000000000000000000000000000"
-        );
-
-        let v = vec!(
-            h2d!("6300000000000000000000000000000000000000000000000000000000000000"),   // L,R,R,L,L,L,R,R -> closest to Bob, Charlie
-            h2d!("6F00000000000000000000000000000000000000000000000000000000000000"),   // L,R,R,L,R,R,R,R -> closest to Vanessa
-            h2d!("8000000000000000000000000000000000000000000000000000000000000000"),   // R -> closest to Aaron
-        );
-
-        let mut h_tree = HistoryTree::new(2, me, v);
+        let mut h_tree = HistoryTree::new(2, vec!(Prefix::from("01111010")));
 
         h_tree.insert("Bob", 1); // L, R, ...
         h_tree.add_touch(&"Bob");
@@ -877,6 +865,7 @@ mod tests {
             .expect_err("Should be behind placeholder");
     }
 
+    // TODO: finish re-writing this test
     #[test]
     fn push_history_3() {
         let a = h2d!(
@@ -895,9 +884,9 @@ mod tests {
             c, // R
         ];
 
-        let mut h_tree_a = HistoryTree::new(1, a, v.clone());
-        let mut h_tree_b = HistoryTree::new(1, b, v.clone());
-        let mut h_tree_c = HistoryTree::new(1, c, v.clone());
+        let mut h_tree_a = HistoryTree::new(1, vec!(Prefix::from("00")));
+        let mut h_tree_b = HistoryTree::new(1, vec!(Prefix::from("01")));
+        let mut h_tree_c = HistoryTree::new(1, vec!(Prefix::from("1")));
 
         let keys_existing = [
             "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
@@ -921,19 +910,19 @@ mod tests {
             "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
             "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
         ];
-        for k in keys_searching.iter() {
-            let d = closest(&v, drop::crypto::hash(k).unwrap().as_ref());
+        // for k in keys_searching.iter() {
+        //     let d = closest(&v, drop::crypto::hash(k).unwrap().as_ref());
 
-            let res;
-            if d == &a {
-                res = h_tree_a.get_proof(k);
-            } else if d == &b {
-                res = h_tree_b.get_proof(k);
-            } else {
-                res = h_tree_c.get_proof(k);
-            }
+        //     let res;
+        //     if d == &a {
+        //         res = h_tree_a.get_proof(k);
+        //     } else if d == &b {
+        //         res = h_tree_b.get_proof(k);
+        //     } else {
+        //         res = h_tree_c.get_proof(k);
+        //     }
 
-            res.expect("Should have been Ok!");
-        }
+        //     res.expect("Should have been Ok!");
+        // }
     }
 }

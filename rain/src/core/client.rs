@@ -186,18 +186,19 @@ mod test {
     #[tokio::test]
     async fn client_get_merkle_proofs() {
         init_logger();
+        let nr_peer = 3;
 
         let mut t = DataTree::new();
         t.insert("Alan".to_string(), vec![0u8]);
         t.insert("Bob".to_string(), vec![1u8]);
         t.insert("Charlie".to_string(), vec![2u8]);
 
-        let config = SetupConfig::setup(3, t.clone(), 10).await;
+        let config = SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 10).await;
         let tob_info = &config.tob_info;
         let dir_info = &config.dir_info;
 
         async move {
-            let client_node = ClientNode::new(tob_info, dir_info, 3)
+            let client_node = ClientNode::new(tob_info, dir_info, nr_peer)
                 .await
                 .expect("client node creation failed");
 
@@ -230,6 +231,7 @@ mod test {
     #[tokio::test]
     async fn client_send_transaction_request() {
         init_logger();
+        let nr_peer = 1;
 
         let filename =
             "contract_test/target/wasm32-wasi/release/contract_test.wasm";
@@ -241,12 +243,12 @@ mod test {
         t.insert("Bob".to_string(), (1000i32).to_be_bytes().to_vec());
         t.insert("transfer_rule".to_string(), rule_buffer);
 
-        let config = SetupConfig::setup(1, t.clone(), 10).await;
+        let config = SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 10).await;
         let tob_info = &config.tob_info;
         let dir_info = &config.dir_info;
 
         async move {
-            let client_node = ClientNode::new(tob_info, dir_info, 1)
+            let client_node = ClientNode::new(tob_info, dir_info, nr_peer)
                 .await
                 .expect("client node creation failed");
 
@@ -296,6 +298,7 @@ mod test {
     #[tokio::test]
     async fn late_request_consistent() {
         init_logger();
+        let nr_peer = 1;
 
         let filename =
             "contract_test/target/wasm32-wasi/release/contract_test.wasm";
@@ -309,16 +312,16 @@ mod test {
         t.insert("Dave".to_string(), (1000i32).to_be_bytes().to_vec());
         t.insert("transfer_rule".to_string(), rule_buffer);
 
-        let config = SetupConfig::setup(1, t.clone(), 10).await;
+        let config = SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 10).await;
         let tob_info = &config.tob_info;
         let dir_info = &config.dir_info;
 
         async move {
-            let client_node_1 = ClientNode::new(tob_info, dir_info, 1)
+            let client_node_1 = ClientNode::new(tob_info, dir_info, nr_peer)
                 .await
                 .expect("client node 1 creation failed");
 
-            let client_node_2 = ClientNode::new(tob_info, dir_info, 1)
+            let client_node_2 = ClientNode::new(tob_info, dir_info, nr_peer)
                 .await
                 .expect("client node 2 creation failed");
 
@@ -370,9 +373,6 @@ mod test {
                 .await
                 .expect("error sending request");
 
-            // info!("Awaiting");
-            // let _ = timeout(Duration::from_millis(2000), future::pending::<()>()).await;
-
             let result = client_node_1
                 .get_merkle_proofs(vec![
                     "Alice".to_string(),
@@ -400,6 +400,7 @@ mod test {
     #[tokio::test]
     async fn late_request_not_consistent() {
         init_logger();
+        let nr_peer = 1;
 
         let filename =
             "contract_test/target/wasm32-wasi/release/contract_test.wasm";
@@ -411,16 +412,16 @@ mod test {
         t.insert("Bob".to_string(), (1000i32).to_be_bytes().to_vec());
         t.insert("transfer_rule".to_string(), rule_buffer);
 
-        let config = SetupConfig::setup(1, t.clone(), 10).await;
+        let config = SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 10).await;
         let tob_info = &config.tob_info;
         let dir_info = &config.dir_info;
 
         async move {
-            let client_node_1 = ClientNode::new(tob_info, dir_info, 1)
+            let client_node_1 = ClientNode::new(tob_info, dir_info, nr_peer)
                 .await
                 .expect("client node 1 creation failed");
 
-            let client_node_2 = ClientNode::new(tob_info, dir_info, 1)
+            let client_node_2 = ClientNode::new(tob_info, dir_info, nr_peer)
                 .await
                 .expect("client node 2 creation failed");
 
@@ -489,6 +490,7 @@ mod test {
     #[tokio::test(threaded_scheduler)]
     async fn request_in_ancient_history() {
         init_logger();
+        let nr_peer = 3;
 
         let filename =
             "contract_test/target/wasm32-wasi/release/contract_test.wasm";
@@ -505,12 +507,12 @@ mod test {
         }
         t.insert("transfer_rule".to_string(), rule_buffer);
 
-        let config = SetupConfig::setup(3, t.clone(), 2).await;
+        let config = SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 2).await;
         let tob_info = &config.tob_info;
         let dir_info = &config.dir_info;
 
         async move {
-            let client_node_1 = ClientNode::new(tob_info, dir_info, 3)
+            let client_node_1 = ClientNode::new(tob_info, dir_info, nr_peer)
                 .await
                 .expect("client node 1 creation failed");
 
@@ -592,6 +594,7 @@ mod test {
     #[tokio::test(threaded_scheduler)]
     async fn mixed_get_proofs() {
         init_logger();
+        let nr_peer = 3;
 
         let filename =
             "contract_test/target/wasm32-wasi/release/contract_test.wasm";
@@ -614,12 +617,12 @@ mod test {
         t.insert("transfer_rule".to_string(), rule_buffer);
 
         // Setup a tob which only broadcasts to one of the nodes
-        let config = SetupConfig::setup_asymetric(3, 1, t.clone(), 10).await;
+        let config = SetupConfig::setup_asymetric(get_balanced_prefixes(nr_peer), 1, t.clone(), 10).await;
         let tob_info = &config.tob_info;
         let dir_info = &config.dir_info;
 
         async move {
-            let client_node_1 = ClientNode::new(&tob_info, dir_info, 3)
+            let client_node_1 = ClientNode::new(&tob_info, dir_info, nr_peer)
                 .await
                 .expect("client node 1 creation failed");
 
@@ -737,6 +740,7 @@ mod test {
     // #[tokio::test]
     async fn memory_footprint() {
         init_logger();
+        let nr_peer = 5;
 
         let filename =
             "contract_test/target/wasm32-wasi/release/contract_test.wasm";
@@ -749,12 +753,12 @@ mod test {
         }
         t.insert("transfer_rule".to_string(), rule_buffer);
 
-        let config = SetupConfig::setup(5, t.clone(), 3).await;
+        let config = SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 3).await;
         let tob_info = &config.tob_info;
         let dir_info = &config.dir_info;
 
         async move {
-            let client_node = ClientNode::new(tob_info, dir_info, 5)
+            let client_node = ClientNode::new(tob_info, dir_info, nr_peer)
                 .await
                 .expect("client node creation failed");
 
@@ -853,6 +857,7 @@ mod test {
     // #[tokio::test]
     async fn success_rate() {
         init_logger();
+        let nr_peer = 1;
 
         let filename =
             "contract_test/target/wasm32-wasi/release/contract_test.wasm";
@@ -865,12 +870,12 @@ mod test {
         }
         t.insert("transfer_rule".to_string(), rule_buffer);
 
-        let config = SetupConfig::setup(1, t.clone(), 20).await;
+        let config = SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 20).await;
         let tob_info = &config.tob_info;
         let dir_info = &config.dir_info;
 
         async move {
-            let client_node = ClientNode::new(tob_info, dir_info, 1)
+            let client_node = ClientNode::new(tob_info, dir_info, nr_peer)
                 .await
                 .expect("client node creation failed");
 

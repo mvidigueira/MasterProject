@@ -45,6 +45,7 @@ impl TobServer {
         debug!("waiting to connect to corenodes");
         debug!("Directory Info: {:#?}", dir_info);
 
+        // TODO: remove this and give the peer list directly to this method
         let connector = TcpConnector::new(exchanger.clone());
         let mut dir_connector = DirectoryConnector::new(connector);
         let mut peers = if nr_peer > 0 {
@@ -236,7 +237,7 @@ mod test {
     async fn tob_forwarding() {
         init_logger();
 
-        let config = SetupConfig::setup(1, DataTree::new(), 10).await;
+        let config = SetupConfig::setup(get_balanced_prefixes(1), DataTree::new(), 10).await;
 
         let mut connection = create_peer_and_connect(&config.tob_info).await;
 

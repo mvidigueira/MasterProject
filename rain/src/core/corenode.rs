@@ -2,12 +2,11 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use drop::crypto::{
-    self,
     key::exchange::{Exchanger, PublicKey},
     Digest,
 };
 use drop::net::{
-    Connection, DirectoryConnector, DirectoryInfo, DirectoryListener, Listener,
+    Connection, DirectoryInfo, DirectoryListener, Listener,
     ListenerError, TcpConnector, TcpListener,
 };
 
@@ -15,7 +14,7 @@ use super::{
     DataTree, RecordID, RecordVal, RuleTransaction, TxRequest, TxResponse,
 };
 
-use super::history_tree::HistoryTree;
+use super::history_tree::{HistoryTree, Prefix};
 use super::CoreNodeError;
 
 use futures::future::{self, Either};
@@ -52,7 +51,7 @@ impl HTree {
             overhead += (**k).len();
         }
         overhead += &self.history.len() * mem::size_of::<Digest>();
-        overhead += &self.d_list.len() * mem::size_of::<Digest>();
+        overhead += &self.prefix_list.len() * mem::size_of::<Prefix>();
 
         (overhead, bincode::serialize(&self.tree).unwrap().len())
     }
@@ -74,9 +73,9 @@ impl CoreNode {
         node_addr: SocketAddr,
         dir_info: &DirectoryInfo,
         tob_info: &DirectoryInfo,
-        nr_peer: usize,
         dt: DataTree,
         history_len: usize,
+        prefix_list: Vec<Prefix>,
     ) -> Result<(Self, Sender<()>), CoreNodeError> {
         let (tx, rx) = channel();
 
@@ -91,24 +90,9 @@ impl CoreNode {
             DirectoryListener::new(listener, connector, dir_info.addr())
                 .await?;
 
-        let connector = TcpConnector::new(exchanger.clone());
-        let mut dir_connector = DirectoryConnector::new(connector);
-        let mut peers = if nr_peer > 0 {
-            dir_connector
-                .wait(nr_peer, dir_info)
-                .await
-                .expect("could not wait")
-        } else {
-            Vec::new()
-        };
-
         let mut h_tree = HistoryTree::new(
             history_len,
-            crypto::hash(exchanger.keypair().public()).unwrap(),
-            peers
-                .drain(..)
-                .map(|info| crypto::hash(info.public()).unwrap())
-                .collect(),
+            prefix_list,
         );
 
         for (k, v) in dt.clone_to_vec().drain(..) {
@@ -437,9 +421,9 @@ mod test {
             next_test_ip4(),
             &dir_info,
             &fake_tob_info,
-            1,
             DataTree::new(),
             10,
+            vec!("0"),
         )
         .await;
 
@@ -451,7 +435,7 @@ mod test {
     async fn corenode_getproof() {
         init_logger();
 
-        let config = SetupConfig::setup(1, DataTree::new(), 10).await;
+        let config = SetupConfig::setup(get_balanced_prefixes(1), DataTree::new(), 10).await;
 
         let mut connection =
             create_peer_and_connect(&config.corenodes[0].2).await;
@@ -484,7 +468,7 @@ mod test {
     async fn request_add() {
         init_logger();
 
-        let config = SetupConfig::setup(1, DataTree::new(), 10).await;
+        let config = SetupConfig::setup(get_balanced_prefixes(1), DataTree::new(), 10).await;
 
         let mut c_node = create_peer_and_connect(&config.corenodes[0].2).await;
         let mut c_tob = create_peer_and_connect(&config.tob_info).await;
@@ -631,8 +615,7 @@ mod test {
 
         let mut h_tree = HistoryTree::new(
             5,
-            crypto::hash(Exchanger::random().keypair().public()).unwrap(),
-            vec![],
+            vec![]
         );
 
         for (k, v) in t.clone_to_vec().drain(..) {

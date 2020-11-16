@@ -10,6 +10,7 @@ pub mod test;
 pub use client::ClientNode;
 pub use corenode::CoreNode;
 pub use tob_server::TobServer;
+pub use history_tree::Prefix;
 
 use std::io::Error as IoError;
 
