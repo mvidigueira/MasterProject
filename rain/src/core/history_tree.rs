@@ -868,22 +868,6 @@ mod tests {
     // TODO: finish re-writing this test
     #[test]
     fn push_history_3() {
-        let a = h2d!(
-            "6300000000000000000000000000000000000000000000000000000000000000"
-        );
-        let b = h2d!(
-            "6F00000000000000000000000000000000000000000000000000000000000000"
-        );
-        let c = h2d!(
-            "8000000000000000000000000000000000000000000000000000000000000000"
-        );
-
-        let mut v = vec![
-            a, // L,R,R,L,L,L,R,R
-            b, // L,R,R,L,R,R,R,R
-            c, // R
-        ];
-
         let mut h_tree_a = HistoryTree::new(1, vec!(Prefix::from("00")));
         let mut h_tree_b = HistoryTree::new(1, vec!(Prefix::from("01")));
         let mut h_tree_c = HistoryTree::new(1, vec!(Prefix::from("1")));
@@ -904,25 +888,24 @@ mod tests {
         h_tree_c.push_history();
         h_tree_c.push_history();
 
-        v.sort_by_key(|x| *x.as_ref());
-
         let keys_searching = [
             "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
             "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
         ];
-        // for k in keys_searching.iter() {
-        //     let d = closest(&v, drop::crypto::hash(k).unwrap().as_ref());
+        for k in keys_searching.iter() {
+            let d = drop::crypto::hash(k).unwrap();
+            let d_ref = d.as_ref();
 
-        //     let res;
-        //     if d == &a {
-        //         res = h_tree_a.get_proof(k);
-        //     } else if d == &b {
-        //         res = h_tree_b.get_proof(k);
-        //     } else {
-        //         res = h_tree_c.get_proof(k);
-        //     }
+            let res;
+            if d_ref[0] < 64u8 {
+                res = h_tree_a.get_proof(k);
+            } else if d_ref[0] >= 64u8 && d_ref[0] < 128u8 {
+                res = h_tree_b.get_proof(k);
+            } else {
+                res = h_tree_c.get_proof(k);
+            }
 
-        //     res.expect("Should have been Ok!");
-        // }
+            res.expect("Should have been Ok!");
+        }
     }
 }

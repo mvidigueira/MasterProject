@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use drop::crypto::key::exchange::Exchanger;
 use drop::crypto::{self, Digest};
-use drop::net::{Connector, DirectoryConnector, DirectoryInfo, TcpConnector};
+use drop::net::{Connector, DirectoryInfo, TcpConnector};
 
 use super::{
     closest, history_tree::HistoryTree, DataTree, RecordID, RuleTransaction,
@@ -13,7 +13,7 @@ use super::{ClientError, InconsistencyError, ReplyError};
 
 use futures::future;
 
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 pub struct ClientNode {
     corenodes: Vec<(Digest, DirectoryInfo)>,
@@ -24,36 +24,17 @@ pub struct ClientNode {
 impl ClientNode {
     pub async fn new(
         tob_info: &DirectoryInfo,
-        dir_info: &DirectoryInfo,
-        nr_peer: usize,
+        mut corenodes_info: Vec<DirectoryInfo>
     ) -> Result<Self, ClientError> {
         let exchanger = Exchanger::random();
+        let connector = TcpConnector::new(exchanger);
 
-        let connector = TcpConnector::new(exchanger.clone());
-
-        let mut dir_connector = DirectoryConnector::new(connector);
-
-        debug!("Waiting for corenodes to join directory");
-
-        let mut corenodes = if nr_peer > 0 {
-            dir_connector
-                .wait(nr_peer, dir_info)
-                .await
-                .expect("could not wait")
-        } else {
-            Vec::new()
-        };
-
-        drop(dir_connector);
-
-        let mut corenodes: Vec<(Digest, DirectoryInfo)> = corenodes
+        let mut corenodes: Vec<(Digest, DirectoryInfo)> = corenodes_info
             .drain(..)
             .map(|info| (crypto::hash(info.public()).unwrap(), info))
             .collect();
 
         corenodes.sort_by_key(|x| *x.0.as_ref());
-
-        let connector = TcpConnector::new(exchanger);
 
         let ret = Self {
             corenodes: corenodes,
@@ -180,7 +161,7 @@ mod test {
     use std::time::Duration;
     use tokio::time::timeout;
 
-    use tracing::trace_span;
+    use tracing::{trace_span, debug};
     use tracing_futures::Instrument;
 
     #[tokio::test]
@@ -194,11 +175,11 @@ mod test {
         t.insert("Charlie".to_string(), vec![2u8]);
 
         let config = SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 10).await;
+        let corenodes_info = config.corenodes.iter().map(|x| x.2.clone()).collect();
         let tob_info = &config.tob_info;
-        let dir_info = &config.dir_info;
 
         async move {
-            let client_node = ClientNode::new(tob_info, dir_info, nr_peer)
+            let client_node = ClientNode::new(tob_info, corenodes_info)
                 .await
                 .expect("client node creation failed");
 
@@ -244,11 +225,11 @@ mod test {
         t.insert("transfer_rule".to_string(), rule_buffer);
 
         let config = SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 10).await;
+        let corenodes_info = config.corenodes.iter().map(|x| x.2.clone()).collect();
         let tob_info = &config.tob_info;
-        let dir_info = &config.dir_info;
 
         async move {
-            let client_node = ClientNode::new(tob_info, dir_info, nr_peer)
+            let client_node = ClientNode::new(tob_info, corenodes_info)
                 .await
                 .expect("client node creation failed");
 
@@ -313,15 +294,15 @@ mod test {
         t.insert("transfer_rule".to_string(), rule_buffer);
 
         let config = SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 10).await;
+        let corenodes_info: Vec<DirectoryInfo> = config.corenodes.iter().map(|x| x.2.clone()).collect();
         let tob_info = &config.tob_info;
-        let dir_info = &config.dir_info;
 
         async move {
-            let client_node_1 = ClientNode::new(tob_info, dir_info, nr_peer)
+            let client_node_1 = ClientNode::new(tob_info, corenodes_info.clone())
                 .await
                 .expect("client node 1 creation failed");
 
-            let client_node_2 = ClientNode::new(tob_info, dir_info, nr_peer)
+            let client_node_2 = ClientNode::new(tob_info, corenodes_info)
                 .await
                 .expect("client node 2 creation failed");
 
@@ -413,15 +394,15 @@ mod test {
         t.insert("transfer_rule".to_string(), rule_buffer);
 
         let config = SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 10).await;
+        let corenodes_info: Vec<DirectoryInfo> = config.corenodes.iter().map(|x| x.2.clone()).collect();
         let tob_info = &config.tob_info;
-        let dir_info = &config.dir_info;
 
         async move {
-            let client_node_1 = ClientNode::new(tob_info, dir_info, nr_peer)
+            let client_node_1 = ClientNode::new(tob_info, corenodes_info.clone())
                 .await
                 .expect("client node 1 creation failed");
 
-            let client_node_2 = ClientNode::new(tob_info, dir_info, nr_peer)
+            let client_node_2 = ClientNode::new(tob_info, corenodes_info)
                 .await
                 .expect("client node 2 creation failed");
 
@@ -508,11 +489,11 @@ mod test {
         t.insert("transfer_rule".to_string(), rule_buffer);
 
         let config = SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 2).await;
+        let corenodes_info: Vec<DirectoryInfo> = config.corenodes.iter().map(|x| x.2.clone()).collect();
         let tob_info = &config.tob_info;
-        let dir_info = &config.dir_info;
 
         async move {
-            let client_node_1 = ClientNode::new(tob_info, dir_info, nr_peer)
+            let client_node_1 = ClientNode::new(tob_info, corenodes_info)
                 .await
                 .expect("client node 1 creation failed");
 
@@ -618,11 +599,11 @@ mod test {
 
         // Setup a tob which only broadcasts to one of the nodes
         let config = SetupConfig::setup_asymetric(get_balanced_prefixes(nr_peer), 1, t.clone(), 10).await;
+        let corenodes_info: Vec<DirectoryInfo> = config.corenodes.iter().map(|x| x.2.clone()).collect();
         let tob_info = &config.tob_info;
-        let dir_info = &config.dir_info;
 
         async move {
-            let client_node_1 = ClientNode::new(&tob_info, dir_info, nr_peer)
+            let client_node_1 = ClientNode::new(&tob_info, corenodes_info)
                 .await
                 .expect("client node 1 creation failed");
 
@@ -754,11 +735,11 @@ mod test {
         t.insert("transfer_rule".to_string(), rule_buffer);
 
         let config = SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 3).await;
+        let corenodes_info: Vec<DirectoryInfo> = config.corenodes.iter().map(|x| x.2.clone()).collect();
         let tob_info = &config.tob_info;
-        let dir_info = &config.dir_info;
 
         async move {
-            let client_node = ClientNode::new(tob_info, dir_info, nr_peer)
+            let client_node = ClientNode::new(tob_info, corenodes_info)
                 .await
                 .expect("client node creation failed");
 
@@ -871,11 +852,11 @@ mod test {
         t.insert("transfer_rule".to_string(), rule_buffer);
 
         let config = SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 20).await;
+        let corenodes_info: Vec<DirectoryInfo> = config.corenodes.iter().map(|x| x.2.clone()).collect();
         let tob_info = &config.tob_info;
-        let dir_info = &config.dir_info;
 
         async move {
-            let client_node = ClientNode::new(tob_info, dir_info, nr_peer)
+            let client_node = ClientNode::new(tob_info, corenodes_info)
                 .await
                 .expect("client node creation failed");
 
