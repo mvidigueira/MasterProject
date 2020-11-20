@@ -244,7 +244,7 @@ pub fn get_balanced_prefixes(n: usize) -> Vec<Vec<Prefix>> {
     let log2 = (std::mem::size_of::<usize>() * 8) as u32 - n.leading_zeros() - 1;
     let pow2 =  (2 as usize).pow(log2);
     let r = n - pow2;
-    let z = pow2 - 2*r; 
+    let z = n - 2*r;
 
     let mut list: Vec<Vec<Prefix>> = vec!();
     let mut base = Prefix::new(vec!(0), 0);

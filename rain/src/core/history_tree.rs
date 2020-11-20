@@ -29,6 +29,18 @@ impl Prefix {
         Prefix{key, remainder}
     }
 
+    pub fn bit_len(&self) -> usize {
+        (self.key.len()-1) * 8 + self.remainder as usize
+    }
+
+    pub fn bit(&self, n: usize) -> bool {
+        if n > self.bit_len() {
+            panic!("Prefix too short");
+        }
+
+        (self.key[n/8] & (1 << 7-n%8)) > 0
+    }
+
     pub fn increment(&mut self) {
         let s = self.key.len();
         if s == 0 {
@@ -47,7 +59,7 @@ impl Prefix {
 
     pub fn set_length_in_bits(&mut self, length: usize) {
         let mut s = length / 8;
-        let remainder = length % 8;
+        let remainder = (length % 8) as u8;
         if remainder > 0 {
             s+=1;
         }
@@ -55,11 +67,26 @@ impl Prefix {
         if s > 0 && remainder > 0 {
             self.key[s-1] &= u8::MAX << (8-remainder);
         }
+        self.remainder = remainder;
     }
 
     pub fn includes(&self, other: &Self) -> bool {
         // Compare full bytes
-        let full_byte_count = std::cmp::min(self.key.len(), other.key.len());
+
+        let mut len_a = self.key.len() * 8;
+        if self.remainder > 0 {
+            len_a = len_a - 8 + self.remainder as usize;
+        }
+
+        let mut len_b = other.key.len() * 8;
+        if other.remainder > 0 {
+            len_b = len_b - 8 + other.remainder as usize;
+        }
+
+        let min = std::cmp::min(len_a, len_b);
+        let full_byte_count = min / 8;
+        let min_remainder = min % 8;
+
         if full_byte_count > 0 {
             match self.key[0..full_byte_count].cmp(&other.key[0..full_byte_count]) {
                 std::cmp::Ordering::Equal => (),
@@ -68,16 +95,15 @@ impl Prefix {
         }
 
         // Compare last incomplete byte
-        let min_remainder = std::cmp::min(self.remainder, other.remainder);
         if min_remainder > 0 {
             let (byte_a, byte_b) = (self.key[full_byte_count], other.key[full_byte_count]);
+            // println!("byte_a: {}, byte_b: {}", byte_a, byte_b);
             let byte_a = (byte_a >> (8-min_remainder)) << (8-min_remainder);
             let byte_b = (byte_b >> (8-min_remainder)) << (8-min_remainder);
-            if full_byte_count > 0 {
-                match byte_a.cmp(&byte_b) {
-                    std::cmp::Ordering::Equal => (),
-                    _ => return false,
-                }
+            // println!("byte_a: {}, byte_b: {}", byte_a, byte_b);
+            match byte_a.cmp(&byte_b) {
+                std::cmp::Ordering::Equal => (),
+                _ => return false,
             }
         }
 
@@ -457,13 +483,8 @@ where
         let prefix_list = &self.prefix_list;
 
         let is_close = move |path: [u8; 32], up_to_bit: usize| {
-            let mut len = up_to_bit / 8;
-            let remainder = up_to_bit % 8;
-            if remainder > 0 {
-                len += 1;
-            }
-
-            let target = &Prefix::new(path[0..len].to_vec(), remainder as u8);
+            let target = &mut Prefix::new(path.to_vec(), 0);
+            target.set_length_in_bits(up_to_bit);
             // Not optimized yet
             // Binary search and comparison with left and right elements should work
             // but must verify first that it is theoretically correct
@@ -513,7 +534,7 @@ where
         self.tree.len()
     }
 
-    /// "Closes" a transaction.
+    // "Closes" a transaction.
     pub fn push_history(&mut self) {
         if self.history.len() == self.history_len {
             self.history.pop_back();
@@ -535,13 +556,6 @@ pub type Validator<K, V> = Tree<K, V>;
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use std::convert::TryFrom;
-    macro_rules! h2d {
-        ($data:expr) => {
-            Digest::try_from($data).expect("failed to create digest")
-        };
-    }
 
     #[test]
     fn consistent_inserts_1() {
@@ -802,6 +816,8 @@ mod tests {
         h_tree.add_touch(&"Charlie");
         h_tree.push_history();
 
+        println!("{:?}", drop::crypto::hash(&"Aaron"));
+
         let proof = h_tree.get_proofs(["Bob", "Charlie"].iter()).unwrap();
 
         h_tree.insert("Aaron", 2); // R, ...
@@ -840,6 +856,7 @@ mod tests {
         h_tree.get("Bob").expect("Should be OK");
         h_tree.get("Charlie").expect("Should be OK");
         h_tree.get("Vanessa").expect("Should be OK");
+        println!("{:?}", h_tree.get("Aaron"));
         h_tree
             .get("Aaron")
             .expect_err("Should be behind placeholder");
@@ -865,7 +882,6 @@ mod tests {
             .expect_err("Should be behind placeholder");
     }
 
-    // TODO: finish re-writing this test
     #[test]
     fn push_history_3() {
         let mut h_tree_a = HistoryTree::new(1, vec!(Prefix::from("00")));
@@ -881,12 +897,20 @@ mod tests {
             h_tree_c.insert(*k, 42);
         }
 
+        println!("Tree a: \n{:#?}\n", &h_tree_a.tree);
+        println!("Tree b: \n{:#?}\n", &h_tree_b.tree);
+        println!("Tree c: \n{:#?}\n", &h_tree_c.tree);
+
         h_tree_a.push_history();
         h_tree_a.push_history();
         h_tree_b.push_history();
         h_tree_b.push_history();
         h_tree_c.push_history();
         h_tree_c.push_history();
+
+        println!("Tree a: \n{:#?}\n", &h_tree_a.tree);
+        println!("Tree b: \n{:#?}\n", &h_tree_b.tree);
+        println!("Tree c: \n{:#?}\n", &h_tree_c.tree);
 
         let keys_searching = [
             "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
@@ -908,4 +932,11 @@ mod tests {
             res.expect("Should have been Ok!");
         }
     }
+
+    // #[test]
+    // fn test_prefixes() {
+    //     let target = Prefix::from("1");
+    //     let p = Prefix::from("01111010");
+    //     println!("P: {:?}, Target: {:?}, Is_close: {}", p, target, target.includes(&p) || p.includes(&target));
+    // }
 }

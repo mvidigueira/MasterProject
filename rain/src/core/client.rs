@@ -61,6 +61,8 @@ impl ClientNode {
             m.get_mut(info).unwrap().0.push(r_id.clone());
         }
 
+        info!("MAP: {:?}", m);
+
         let mut results =
             future::join_all(m.drain().map(|(k, v)| async move {
                 (v.0, self.get_merkle_proof(&k, v.1).await)
@@ -468,6 +470,7 @@ mod test {
         config.tear_down().await;
     }
 
+    // Test is failing because client hasn't been updated to use prefixes instead of 'closest'
     #[tokio::test(threaded_scheduler)]
     async fn request_in_ancient_history() {
         init_logger();
@@ -491,6 +494,8 @@ mod test {
         let config = SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 2).await;
         let corenodes_info: Vec<DirectoryInfo> = config.corenodes.iter().map(|x| x.2.clone()).collect();
         let tob_info = &config.tob_info;
+
+        info!("Corenodes: {:?}", corenodes_info);
 
         async move {
             let client_node_1 = ClientNode::new(tob_info, corenodes_info)
@@ -522,7 +527,7 @@ mod test {
                 .expect("error sending request");
 
             let _ =
-                timeout(Duration::from_secs(5), future::pending::<()>()).await;
+                timeout(Duration::from_secs(2), future::pending::<()>()).await;
 
             let proof_1 = client_node_1
                 .get_merkle_proofs(vec![
@@ -549,22 +554,23 @@ mod test {
                 .expect("error sending request");
 
             let _ =
-                timeout(Duration::from_secs(5), future::pending::<()>()).await;
+                timeout(Duration::from_secs(2), future::pending::<()>()).await;
 
             let result = client_node_1
                 .get_merkle_proofs(
-                    records.iter().map(|x| String::from(*x)).collect(),
+                    ["Alice", "Bob", "Charlie", "Dave", "Aaron", "Vanessa", "Justin", "Irina"].iter().map(|x| String::from(*x)).collect(),
                 )
                 .await
                 .expect("merkle proof error");
 
             assert_eq!(get_i32_from_result(&"Alice".to_string(), &result), 950);
             assert_eq!(get_i32_from_result(&"Bob".to_string(), &result), 1050);
-            assert_eq!(
-                get_i32_from_result(&"Charlie".to_string(), &result),
-                900
-            );
+            assert_eq!(get_i32_from_result(&"Charlie".to_string(), &result), 900);
             assert_eq!(get_i32_from_result(&"Dave".to_string(), &result), 1100);
+            assert_eq!(get_i32_from_result(&"Aaron".to_string(), &result), 1000);
+            assert_eq!(get_i32_from_result(&"Vanessa".to_string(), &result), 1000);
+            assert_eq!(get_i32_from_result(&"Justin".to_string(), &result), 1000);
+            assert_eq!(get_i32_from_result(&"Irina".to_string(), &result), 1000);
         }
         .instrument(trace_span!("get_merkle_proofs"))
         .await;
