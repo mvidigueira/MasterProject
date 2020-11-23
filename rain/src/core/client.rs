@@ -6,43 +6,66 @@ use drop::net::{Connector, DirectoryInfo, TcpConnector};
 
 use super::{
     closest, history_tree::HistoryTree, DataTree, RecordID, RuleTransaction,
-    TxRequest, TxResponse,
+    TxRequest, TxResponse, Prefix,
 };
 
 use super::{ClientError, InconsistencyError, ReplyError};
 
 use futures::future;
 
-use tracing::{error, info};
+use tracing::{error, info, debug};
 
-pub struct ClientNode {
-    corenodes: Vec<(Digest, DirectoryInfo)>,
+pub struct ClientNode<'a> {
+    corenodes: Vec<DirectoryInfo>,
+    prefix_list: Vec<(Prefix, Vec<&'a DirectoryInfo>)>,
     connector: TcpConnector,
     tob_info: DirectoryInfo,
 }
 
-impl ClientNode {
-    pub async fn new(
+impl<'a> ClientNode<'a> {
+    pub fn new(
         tob_info: &DirectoryInfo,
-        mut corenodes_info: Vec<DirectoryInfo>
+        corenodes_info: Vec<DirectoryInfo>,
+        mut prefix_info: Vec<Vec<Prefix>>,
     ) -> Result<Self, ClientError> {
-        let exchanger = Exchanger::random();
-        let connector = TcpConnector::new(exchanger);
+        let mut p_map = HashMap::<Prefix, Vec<&DirectoryInfo>>::new();
 
-        let mut corenodes: Vec<(Digest, DirectoryInfo)> = corenodes_info
-            .drain(..)
-            .map(|info| (crypto::hash(info.public()).unwrap(), info))
-            .collect();
+        for (i, ps) in prefix_info.drain(..).enumerate() {
+            let c_ref = &corenodes_info[i];
+            for p in ps {
+                let e = p_map.entry(p).or_insert(vec!());
+                e.push(c_ref);
+            }
+        }
 
-        corenodes.sort_by_key(|x| *x.0.as_ref());
+        let mut prefix_list: Vec<(Prefix, Vec<&DirectoryInfo>)> = p_map.drain().collect();
+        prefix_list.sort_by(|x, y| x.0.cmp(&y.0)); // Order by prefix
+
+        let connector = TcpConnector::new(Exchanger::random());
 
         let ret = Self {
-            corenodes: corenodes,
+            corenodes: corenodes_info,
+            prefix_list: prefix_list,
             connector: connector,
             tob_info: tob_info.clone(),
         };
 
         Ok(ret)
+    }
+
+    pub fn covering(&self, r_id: RecordID) -> Vec<&'a DirectoryInfo> {
+        let h = Prefix::new(drop::crypto::hash(&r_id).unwrap().as_ref().to_vec(), 0);
+        let mut ret: Vec<&'a DirectoryInfo> = vec!();
+        for (p, v) in self.prefix_list {
+            if p.includes(&h) || h.includes(&p) {
+                for di in v {
+                    if !ret.contains(&di) {
+                        ret.push(&di);
+                    }
+                }
+            }
+        }
+        ret
     }
 
     pub async fn get_merkle_proofs(
@@ -54,14 +77,14 @@ impl ClientNode {
 
         for r_id in records.iter() {
             let info = closest(&self.corenodes, r_id);
-            info!("Closest to {} is {}", r_id, &info);
+            debug!("Closest to {} is {}", r_id, &info);
             if !m.contains_key(info) {
                 m.insert(info.clone(), (Vec::new(), records.clone()));
             }
             m.get_mut(info).unwrap().0.push(r_id.clone());
         }
 
-        info!("MAP: {:?}", m);
+        debug!("MAP: {:?}", m);
 
         let mut results =
             future::join_all(m.drain().map(|(k, v)| async move {
@@ -94,14 +117,6 @@ impl ClientNode {
                 HistoryTree::merge_consistent_trees(&mut base, &t, &records, 0);
             } else {
                 error!("Inconsistency detected between proofs when collecting");
-                // if let Ok(_) = base.get(&"transfer_rule".to_string()) {
-                //     base.insert("transfer_rule".to_string(), vec!(0)); // remove after debugging
-                // }
-                // if let Ok(_) = t.get(&"transfer_rule".to_string()) {
-                //     t.insert("transfer_rule".to_string(), vec!(0)); // remove after debugging
-                // }
-                // error!("Tree base: {:#?}", &base);                  // remove after debugging
-                // error!("Tree old: {:#?}", &t);                      // remove after debugging
                 return Err(InconsistencyError::new().into());
             }
         }

@@ -18,7 +18,7 @@ use std::fmt::Debug;
 use std::num::Wrapping;
 
 // Empty prefix includes all
-#[derive(PartialEq, Eq, Clone, Debug)]
+#[derive(PartialEq, Eq, Clone, Debug, Hash)]
 pub struct Prefix {
     key: Vec<u8>,
     remainder: u8, // total length of prefix = [key.size()-1] * 8 + remainder bits
