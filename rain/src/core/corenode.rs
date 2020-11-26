@@ -118,6 +118,7 @@ impl CoreNode {
 
     // handle this better, don't use an all encompassing error
     pub async fn serve(mut self) -> Result<(), CoreNodeError> {
+        let pk = *self.public_key();
         let mut exit_fut = Some(self.exit);
 
         loop {
@@ -154,6 +155,13 @@ impl CoreNode {
             } else {
                 info!("new directory connection from client {}", peer_addr);
             }
+
+            // let g = self.data.read().await;
+            // let mut t = g.tree.clone();
+            // let pl = &g.prefix_list;
+            // t.remove(&"transfer_rule".to_string());
+            // info!("Server: {:?}. Prefixlist: {:?}, DataTree: {:#?}.", &pk, pl, &t);
+            // drop(g);
 
             let from_client = peer_addr != self.tob_addr;
             task::spawn(
@@ -218,6 +226,7 @@ impl TxRequestHandler {
         records: Vec<RecordID>,
     ) -> Result<(), CoreNodeError> {
         let mut t = guard.get_validator();
+
         for r in records {
             match guard.get_proof_with_placeholder(&r) {
                 Ok(proof) => {

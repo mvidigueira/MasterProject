@@ -1,11 +1,11 @@
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use drop::crypto::key::exchange::Exchanger;
-use drop::crypto::{self, Digest};
 use drop::net::{Connector, DirectoryInfo, TcpConnector};
 
 use super::{
-    closest, history_tree::HistoryTree, DataTree, RecordID, RuleTransaction,
+    history_tree::HistoryTree, DataTree, RecordID, RuleTransaction,
     TxRequest, TxResponse, Prefix,
 };
 
@@ -13,38 +13,36 @@ use super::{ClientError, InconsistencyError, ReplyError};
 
 use futures::future;
 
-use tracing::{error, info, debug};
+use tracing::{error, debug};
 
-pub struct ClientNode<'a> {
-    corenodes: Vec<DirectoryInfo>,
-    prefix_list: Vec<(Prefix, Vec<&'a DirectoryInfo>)>,
+pub struct ClientNode {
+    prefix_list: Vec<(Prefix, Vec<Rc<DirectoryInfo>>)>,
     connector: TcpConnector,
     tob_info: DirectoryInfo,
 }
 
-impl<'a> ClientNode<'a> {
+impl ClientNode {
     pub fn new(
         tob_info: &DirectoryInfo,
         corenodes_info: Vec<DirectoryInfo>,
         mut prefix_info: Vec<Vec<Prefix>>,
     ) -> Result<Self, ClientError> {
-        let mut p_map = HashMap::<Prefix, Vec<&DirectoryInfo>>::new();
+        let mut p_map = HashMap::<Prefix, Vec<Rc<DirectoryInfo>>>::new();
 
         for (i, ps) in prefix_info.drain(..).enumerate() {
-            let c_ref = &corenodes_info[i];
+            let c_ref = Rc::new(corenodes_info[i]);
             for p in ps {
                 let e = p_map.entry(p).or_insert(vec!());
-                e.push(c_ref);
+                e.push(Rc::clone(&c_ref));
             }
         }
 
-        let mut prefix_list: Vec<(Prefix, Vec<&DirectoryInfo>)> = p_map.drain().collect();
+        let mut prefix_list: Vec<(Prefix, Vec<Rc<DirectoryInfo>>)> = p_map.drain().collect();
         prefix_list.sort_by(|x, y| x.0.cmp(&y.0)); // Order by prefix
 
         let connector = TcpConnector::new(Exchanger::random());
 
         let ret = Self {
-            corenodes: corenodes_info,
             prefix_list: prefix_list,
             connector: connector,
             tob_info: tob_info.clone(),
@@ -53,14 +51,15 @@ impl<'a> ClientNode<'a> {
         Ok(ret)
     }
 
-    pub fn covering(&self, r_id: RecordID) -> Vec<&'a DirectoryInfo> {
-        let h = Prefix::new(drop::crypto::hash(&r_id).unwrap().as_ref().to_vec(), 0);
-        let mut ret: Vec<&'a DirectoryInfo> = vec!();
-        for (p, v) in self.prefix_list {
+    // returns all corenodes covering that recordl
+    fn covering(&self, r_id: &RecordID) -> Vec<Rc<DirectoryInfo>> {
+        let h = Prefix::new(drop::crypto::hash(r_id).unwrap().as_ref().to_vec(), 0);
+        let mut ret: Vec<Rc<DirectoryInfo>> = vec!();
+        for (p, v) in self.prefix_list.iter() {
             if p.includes(&h) || h.includes(&p) {
                 for di in v {
                     if !ret.contains(&di) {
-                        ret.push(&di);
+                        ret.push(Rc::clone(&di));
                     }
                 }
             }
@@ -68,27 +67,36 @@ impl<'a> ClientNode<'a> {
         ret
     }
 
+    // returns all corenode-prefix assignments, covering all records.
+    fn assignments(&self, records: &Vec<RecordID>) -> HashMap<Rc<DirectoryInfo>, Vec<RecordID>> {
+        let mut m: HashMap<Rc<DirectoryInfo>, Vec<RecordID>> =
+            HashMap::new();
+
+        for r_id in records.iter() {
+            let infos = self.covering(r_id);
+            debug!("Closest to {} is {:?}", r_id, &infos);
+            for i in infos {
+                let e = m.entry(i).or_insert(Vec::new());
+                e.push(r_id.clone());
+            }
+        }
+
+        m
+    }
+
     pub async fn get_merkle_proofs(
         &self,
         records: Vec<RecordID>,
     ) -> Result<DataTree, ClientError> {
-        let mut m: HashMap<DirectoryInfo, (Vec<RecordID>, Vec<RecordID>)> =
-            HashMap::new();
-
-        for r_id in records.iter() {
-            let info = closest(&self.corenodes, r_id);
-            debug!("Closest to {} is {}", r_id, &info);
-            if !m.contains_key(info) {
-                m.insert(info.clone(), (Vec::new(), records.clone()));
-            }
-            m.get_mut(info).unwrap().0.push(r_id.clone());
-        }
+        let mut m = self.assignments(&records);
 
         debug!("MAP: {:?}", m);
 
+        let txr: &TxRequest = &records.clone().into();
+
         let mut results =
             future::join_all(m.drain().map(|(k, v)| async move {
-                (v.0, self.get_merkle_proof(&k, v.1).await)
+                (v, self.get_merkle_proof(&k, txr).await)
             }))
             .await;
 
@@ -127,16 +135,19 @@ impl<'a> ClientNode<'a> {
     async fn get_merkle_proof(
         &self,
         corenode_info: &DirectoryInfo,
-        records: Vec<RecordID>,
+        records: &TxRequest,
     ) -> Result<(usize, DataTree), ClientError> {
+        match records {
+            TxRequest::Execute(_) => panic!("'records' must be of the form &TxRequest::GetProof"),
+            _ => (),
+        }
+
         let mut connection = self
             .connector
             .connect(corenode_info.public(), &corenode_info.addr())
             .await?;
 
-        let txr = TxRequest::GetProof(records);
-
-        connection.send(&txr).await?;
+        connection.send(records).await?;
         let resp = connection.receive::<TxResponse>().await?;
         match resp {
             TxResponse::GetProof(proof) => Ok(proof),
@@ -178,7 +189,7 @@ mod test {
     use std::time::Duration;
     use tokio::time::timeout;
 
-    use tracing::{trace_span, debug};
+    use tracing::{trace_span, debug, info};
     use tracing_futures::Instrument;
 
     #[tokio::test]
@@ -196,8 +207,7 @@ mod test {
         let tob_info = &config.tob_info;
 
         async move {
-            let client_node = ClientNode::new(tob_info, corenodes_info)
-                .await
+            let client_node = ClientNode::new(tob_info, corenodes_info, get_balanced_prefixes(nr_peer))
                 .expect("client node creation failed");
 
             debug!("client node created");
@@ -246,8 +256,7 @@ mod test {
         let tob_info = &config.tob_info;
 
         async move {
-            let client_node = ClientNode::new(tob_info, corenodes_info)
-                .await
+            let client_node = ClientNode::new(tob_info, corenodes_info, get_balanced_prefixes(nr_peer))
                 .expect("client node creation failed");
 
             debug!("client node created");
@@ -315,12 +324,10 @@ mod test {
         let tob_info = &config.tob_info;
 
         async move {
-            let client_node_1 = ClientNode::new(tob_info, corenodes_info.clone())
-                .await
+            let client_node_1 = ClientNode::new(tob_info, corenodes_info.clone(), get_balanced_prefixes(nr_peer))
                 .expect("client node 1 creation failed");
 
-            let client_node_2 = ClientNode::new(tob_info, corenodes_info)
-                .await
+            let client_node_2 = ClientNode::new(tob_info, corenodes_info, get_balanced_prefixes(nr_peer))
                 .expect("client node 2 creation failed");
 
             let proof_1 = client_node_1
@@ -415,12 +422,10 @@ mod test {
         let tob_info = &config.tob_info;
 
         async move {
-            let client_node_1 = ClientNode::new(tob_info, corenodes_info.clone())
-                .await
+            let client_node_1 = ClientNode::new(tob_info, corenodes_info.clone(), get_balanced_prefixes(nr_peer))
                 .expect("client node 1 creation failed");
 
-            let client_node_2 = ClientNode::new(tob_info, corenodes_info)
-                .await
+            let client_node_2 = ClientNode::new(tob_info, corenodes_info, get_balanced_prefixes(nr_peer))
                 .expect("client node 2 creation failed");
 
             let proof_1 = client_node_1
@@ -513,8 +518,7 @@ mod test {
         info!("Corenodes: {:?}", corenodes_info);
 
         async move {
-            let client_node_1 = ClientNode::new(tob_info, corenodes_info)
-                .await
+            let client_node_1 = ClientNode::new(tob_info, corenodes_info, get_balanced_prefixes(nr_peer))
                 .expect("client node 1 creation failed");
 
             let proof_1 = client_node_1
@@ -624,8 +628,7 @@ mod test {
         let tob_info = &config.tob_info;
 
         async move {
-            let client_node_1 = ClientNode::new(&tob_info, corenodes_info)
-                .await
+            let client_node_1 = ClientNode::new(tob_info, corenodes_info, get_balanced_prefixes(nr_peer))
                 .expect("client node 1 creation failed");
 
             let proof_1 = client_node_1
@@ -760,8 +763,7 @@ mod test {
         let tob_info = &config.tob_info;
 
         async move {
-            let client_node = ClientNode::new(tob_info, corenodes_info)
-                .await
+            let client_node = ClientNode::new(tob_info, corenodes_info, get_balanced_prefixes(nr_peer))
                 .expect("client node creation failed");
 
             debug!("client node created");
@@ -877,8 +879,7 @@ mod test {
         let tob_info = &config.tob_info;
 
         async move {
-            let client_node = ClientNode::new(tob_info, corenodes_info)
-                .await
+            let client_node = ClientNode::new(tob_info, corenodes_info, get_balanced_prefixes(nr_peer))
                 .expect("client node creation failed");
 
             debug!("client node created");

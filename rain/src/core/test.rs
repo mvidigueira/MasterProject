@@ -249,10 +249,12 @@ pub fn get_balanced_prefixes(n: usize) -> Vec<Vec<Prefix>> {
     let mut list: Vec<Vec<Prefix>> = vec!();
     let mut base = Prefix::new(vec!(0), 0);
     base.set_length_in_bits(log2 as usize);
+    println!("log2: {}", log2);
     for _ in 0..z {
         list.push(vec!(base.clone()));
         base.increment();
     }
+    println!("base: {:?}", base);
     base.set_length_in_bits(log2 as usize + 1);
     for _ in 0..2*r {
         list.push(vec!(base.clone()));
@@ -269,3 +271,8 @@ async fn config_setup_teardown() {
     let config = SetupConfig::setup(vec!(vec!("0"), vec!("0"), vec!("0"), vec!("0"), vec!("0")), DataTree::new(), 1).await;
     config.tear_down().await;
 }
+
+// #[test]
+// fn balanced() {
+//     println!("{:?}", get_balanced_prefixes(3));
+// }

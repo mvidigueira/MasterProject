@@ -70,6 +70,12 @@ enum TxRequest {
     Execute(RuleTransaction),
 }
 
+impl From<Vec<RecordID>> for TxRequest {
+    fn from(v: Vec<RecordID>) -> Self {
+        TxRequest::GetProof(v)
+    }
+}
+
 #[derive(
     classic::Serialize, classic::Deserialize, Debug, Clone, Hash, PartialEq, Eq,
 )]

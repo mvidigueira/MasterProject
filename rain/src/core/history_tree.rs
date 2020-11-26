@@ -12,7 +12,7 @@ use std::collections::HashSet;
 use std::hash::Hash;
 use std::sync::Arc;
 
-use tracing::error;
+use tracing::{error, info};
 
 use std::fmt::Debug;
 use std::num::Wrapping;
@@ -47,7 +47,14 @@ impl Prefix {
             // Cannot increment empty prefix
             return;
         }
-        self.key[s-1] = (Wrapping(self.key[s-1]) + Wrapping((2 as u8).pow((7 - self.remainder) as u32))).0;
+        let increment = if self.remainder == 0 {
+            1u8
+        } else {
+            2u8.pow(8 - self.remainder as u32)
+        };
+
+        self.key[s-1] = (Wrapping(self.key[s-1]) + Wrapping(increment)).0;
+
         for i in (1..s).rev() {
             if self.key[i] == 0 {
                 self.key[i-1] = (Wrapping(self.key[i-1]) + Wrapping(1)).0;
@@ -97,17 +104,17 @@ impl Prefix {
         // Compare last incomplete byte
         if min_remainder > 0 {
             let (byte_a, byte_b) = (self.key[full_byte_count], other.key[full_byte_count]);
-            // println!("byte_a: {}, byte_b: {}", byte_a, byte_b);
+            info!("byte_a: {}, byte_b: {}, min_remainder: {}", byte_a, byte_b, min_remainder);
             let byte_a = (byte_a >> (8-min_remainder)) << (8-min_remainder);
             let byte_b = (byte_b >> (8-min_remainder)) << (8-min_remainder);
-            // println!("byte_a: {}, byte_b: {}", byte_a, byte_b);
+            info!("byte_a: {}, byte_b: {}", byte_a, byte_b);
             match byte_a.cmp(&byte_b) {
                 std::cmp::Ordering::Equal => (),
                 _ => return false,
             }
         }
 
-        return self.remainder <= other.remainder
+        return len_a <= len_b;
     }
 }
 
@@ -492,12 +499,19 @@ where
             // p.includes(target) OR target.includes(p) 
             // (emphasis on the second part)
             for p in prefix_list {
-                if p.includes(target) || target.includes(p) {
-                    return true
+                info!("p: {:?}, target: {:?}", p, target);
+                if p.includes(target) {
+                    info!("is_close: true. p includes target");
+                    return true;
+                }
+                if target.includes(p) {
+                    info!("is_close: true. target includes p");
+                    return true;
                 }
             }
 
-            false
+            info!("is_close: false");
+            return false;
         };
 
         let touched_records = self.touches.pop_back().unwrap();
@@ -506,6 +520,7 @@ where
             std::cmp::max(self.history_count + 1 - self.history_len, 0);
         for k in touched_records {
             if self.prefix_list.len() > 0 {
+                info!("Trying to replace: {:?}", k.as_ref());
                 self.tree.replace_with_placeholder(
                     k.as_ref(),
                     last_recent_history,
