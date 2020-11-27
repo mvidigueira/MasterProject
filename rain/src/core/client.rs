@@ -51,7 +51,7 @@ impl ClientNode {
         Ok(ret)
     }
 
-    // returns all corenodes covering that recordl
+    // returns all corenodes covering that record
     fn covering(&self, r_id: &RecordID) -> Vec<Rc<DirectoryInfo>> {
         let h = Prefix::new(drop::crypto::hash(r_id).unwrap().as_ref().to_vec(), 0);
         let mut ret: Vec<Rc<DirectoryInfo>> = vec!();
@@ -89,8 +89,6 @@ impl ClientNode {
         records: Vec<RecordID>,
     ) -> Result<DataTree, ClientError> {
         let mut m = self.assignments(&records);
-
-        debug!("MAP: {:?}", m);
 
         let txr: &TxRequest = &records.clone().into();
 
@@ -831,9 +829,6 @@ mod test {
                     .await
                     .expect("merkle proof error");
 
-                // info!("Awaiting");
-                // let _ = timeout(Duration::from_millis(2000), future::pending::<()>()).await;
-
                 let v: Vec<u8> = vec![0];
                 let args = (1.to_string(), v);
                 client_node
@@ -846,9 +841,6 @@ mod test {
                     .await
                     .expect("error sending request");
             }
-
-            // info!("Awaiting");
-            // let _ = timeout(Duration::from_millis(2000), future::pending::<()>()).await;
         }
         .instrument(trace_span!("get_merkle_proofs"))
         .await;

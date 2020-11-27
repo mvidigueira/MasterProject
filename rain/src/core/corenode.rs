@@ -6,8 +6,8 @@ use drop::crypto::{
     Digest,
 };
 use drop::net::{
-    Connection, DirectoryInfo, DirectoryListener, Listener,
-    ListenerError, TcpConnector, TcpListener,
+    Connection, DirectoryInfo, Listener,
+    ListenerError, TcpListener,
 };
 
 use super::{
@@ -37,30 +37,79 @@ const RECORD_LIMIT: usize = 400;
 
 type HTree = HistoryTree<RecordID, RecordVal>;
 
+pub struct MemoryReport {
+    pub o_h_tree: usize, 
+    pub o_touches_queue: usize,
+    pub o_touches_hashset: usize, 
+    pub o_touches_data: usize,
+    pub o_history_queue: usize,
+    pub o_prefix_list: usize,
+    pub o_tree_serialized: usize,
+}
+
+impl std::fmt::Display for MemoryReport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let o_sum_data_independent = self.o_h_tree + self.o_touches_queue + 
+        self.o_touches_hashset + self.o_touches_data + 
+        self.o_history_queue + self.o_prefix_list;
+
+        write!(f, "Memory usage decomposition:
+        - History tree ------------------------ {} B
+          - Touched records queue: ------------ {} B
+          - Touched records hashset: ---------- {} B
+          - Touched records data: ------------- {} B
+          - Tree root history queue: ---------- {} B
+          - Prefix list ----------------------- {} B
+        Data independent overhead total: ------ {} B
+          - Merkle tree (serialized) ---------- {} B
+        
+        Total memory: ------------------------- {} B",
+        self.o_h_tree, 
+        self.o_touches_queue,
+        self.o_touches_hashset, 
+        self.o_touches_data,
+        self.o_history_queue,
+        self.o_prefix_list, 
+        o_sum_data_independent, 
+        self.o_tree_serialized, 
+        o_sum_data_independent + self.o_tree_serialized)
+    }
+}
+
+
 impl HTree {
-    pub fn memory_usage(&self) -> (usize, usize) {
-        let mut overhead: usize = 0;
-
-        overhead += mem::size_of::<HTree>();
-
+    pub fn memory_usage_report(&self) -> MemoryReport {
+        let o_h_tree = mem::size_of::<HTree>();
+        let mut o_touches_queue = 0;
         for k in &self.touches {
-            overhead += k.len() * mem::size_of::<Arc<RecordID>>();
+            o_touches_queue += k.len() * mem::size_of::<Arc<RecordID>>();
         }
-        overhead += &self.counts.len() * mem::size_of::<Arc<RecordID>>();
+        let o_touches_hashset = &self.counts.len() * mem::size_of::<Arc<RecordID>>();
+        let mut o_touches_data = 0;
         for k in &self.counts {
-            overhead += (**k).len();
+            o_touches_data += (**k).len();
         }
-        overhead += &self.history.len() * mem::size_of::<Digest>();
-        overhead += &self.prefix_list.len() * mem::size_of::<Prefix>();
+        let o_history_queue = &self.history.len() * mem::size_of::<Digest>();
+        let o_prefix_list = &self.prefix_list.len() * mem::size_of::<Prefix>();
 
-        (overhead, bincode::serialize(&self.tree).unwrap().len())
+        let o_tree_serialized = bincode::serialize(&self.tree).unwrap().len();
+
+        MemoryReport{ 
+            o_h_tree, 
+            o_touches_queue,
+            o_touches_hashset, 
+            o_touches_data,
+            o_history_queue,
+            o_prefix_list, 
+            o_tree_serialized,
+        }
     }
 }
 
 type ProtectedTree = Arc<RwLock<HTree>>;
 
 pub struct CoreNode {
-    dir_listener: DirectoryListener,
+    listener: TcpListener,
     tob_addr: SocketAddr,
     tob_pub_key: PublicKey,
     exit: Receiver<()>,
@@ -71,7 +120,6 @@ pub struct CoreNode {
 impl CoreNode {
     pub async fn new(
         node_addr: SocketAddr,
-        dir_info: &DirectoryInfo,
         tob_info: &DirectoryInfo,
         dt: DataTree,
         history_len: usize,
@@ -85,10 +133,10 @@ impl CoreNode {
             .await
             .expect("listen failed");
 
-        let connector = TcpConnector::new(exchanger.clone());
-        let dir_listener =
-            DirectoryListener::new(listener, connector, dir_info.addr())
-                .await?;
+        // let connector = TcpConnector::new(exchanger.clone());
+        // let dir_listener =
+        //     DirectoryListener::new(listener, connector, dir_info.addr())
+        //         .await?;
 
         let mut h_tree = HistoryTree::new(
             history_len,
@@ -103,7 +151,7 @@ impl CoreNode {
 
         let ret = (
             Self {
-                dir_listener: dir_listener,
+                listener: listener,
                 tob_addr: tob_info.addr(),
                 tob_pub_key: *tob_info.public(),
                 exit: rx,
@@ -118,12 +166,11 @@ impl CoreNode {
 
     // handle this better, don't use an all encompassing error
     pub async fn serve(mut self) -> Result<(), CoreNodeError> {
-        let pk = *self.public_key();
         let mut exit_fut = Some(self.exit);
 
         loop {
             let (exit, connection) = match Self::poll_incoming(
-                &mut self.dir_listener,
+                &mut self.listener,
                 exit_fut.take().unwrap(),
             )
             .await
@@ -143,7 +190,6 @@ impl CoreNode {
 
             let peer_addr = connection.peer_addr()?;
             let peer_pub = connection.remote_key();
-            // info!("Peer pub: {:?}. TOB pub {:?}", peer_pub, self.tob_pub_key);
 
             let data = self.data.clone();
 
@@ -155,13 +201,6 @@ impl CoreNode {
             } else {
                 info!("new directory connection from client {}", peer_addr);
             }
-
-            // let g = self.data.read().await;
-            // let mut t = g.tree.clone();
-            // let pl = &g.prefix_list;
-            // t.remove(&"transfer_rule".to_string());
-            // info!("Server: {:?}. Prefixlist: {:?}, DataTree: {:#?}.", &pk, pl, &t);
-            // drop(g);
 
             let from_client = peer_addr != self.tob_addr;
             task::spawn(
@@ -178,14 +217,14 @@ impl CoreNode {
     }
 
     pub fn public_key(&self) -> &PublicKey {
-        self.dir_listener.exchanger().keypair().public()
+        self.listener.exchanger().keypair().public()
     }
 
     async fn poll_incoming(
-        dir_listener: &mut DirectoryListener,
+        listener: &mut TcpListener,
         exit: Receiver<()>,
     ) -> PollResult {
-        match future::select(exit, dir_listener.accept()).await {
+        match future::select(exit, listener.accept()).await {
             Either::Left(_) => PollResult::Exit,
             Either::Right((Ok(connection), exit)) => {
                 PollResult::Incoming(exit, connection)
@@ -339,11 +378,15 @@ impl TxRequestHandler {
 
                 guard.push_history();
 
-                let (overhead, mut tree_size) = guard.memory_usage();
-                if tree_size > bytes.len() {
-                    tree_size -= bytes.len();
+                // let (overhead, mut tree_size) =
+                let mut rep = guard.memory_usage_report();
+                // This is excluding the memory occupied by the operation.
+                // This should be unnecessary once merkle tree memory usage is accurately determined.
+                if rep.o_tree_serialized > bytes.len() {
+                    rep.o_tree_serialized -= bytes.len();
                 }
-                info!("Transaction applied: local data successfully updated. Overhead: {}, Data: {}", overhead, tree_size);
+                info!("Transaction applied: local data successfully updated.
+                {}", rep);
             }
         }
 
@@ -420,15 +463,12 @@ mod test {
     async fn corenode_shutdown() {
         init_logger();
 
-        let (exit_dir, handle_dir, dir_info) = setup_dir(next_test_ip4()).await;
-
         let fake_tob_addr = next_test_ip4();
         let exchanger = Exchanger::random();
         let fake_tob_info = DirectoryInfo::from((*exchanger.keypair().public(), fake_tob_addr));
 
         let (exit_tx, handle, _) = setup_corenode(
             next_test_ip4(),
-            &dir_info,
             &fake_tob_info,
             DataTree::new(),
             10,
@@ -437,7 +477,6 @@ mod test {
         .await;
 
         wait_for_server(exit_tx, handle).await;
-        wait_for_server(exit_dir, handle_dir).await;
     }
 
     #[tokio::test]

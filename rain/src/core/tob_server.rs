@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use drop::crypto::key::exchange::{Exchanger, PublicKey};
 use drop::net::{
-    Connection, DirectoryConnector, DirectoryInfo, Listener, ListenerError,
+    Connection, DirectoryInfo, Listener, ListenerError,
     TcpConnector, TcpListener,
 };
 
@@ -33,8 +33,7 @@ impl TobServer {
     pub async fn new(
         tob_addr: SocketAddr,
         exchanger: Exchanger,
-        dir_info: &DirectoryInfo,
-        nr_peer: usize,
+        mut corenodes_info: Vec<DirectoryInfo>,
     ) -> Result<(Self, Sender<()>), TobServerError> {
         let (tx, rx) = channel();
 
@@ -42,30 +41,16 @@ impl TobServer {
             .await
             .expect("listen failed");
 
-        debug!("waiting to connect to corenodes");
-        debug!("Directory Info: {:#?}", dir_info);
-
-        // TODO: remove this and give the peer list directly to this method
-        let connector = TcpConnector::new(exchanger.clone());
-        let mut dir_connector = DirectoryConnector::new(connector);
-        let mut peers = if nr_peer > 0 {
-            dir_connector
-                .wait(nr_peer, dir_info)
-                .await
-                .expect("could not wait")
-        } else {
-            Vec::new()
-        };
+        // debug!("waiting to connect to corenodes");
+        // debug!("Directory Info: {:#?}", dir_info);
 
         debug!("successfully connected to corenodes");
-
-        drop(dir_connector);
 
         let connector = TcpConnector::new(exchanger);
 
         let sys = System::new_with_connector_zipped(
             &connector,
-            peers.drain(..).map(|info| (*info.public(), info.addr())),
+            corenodes_info.drain(..).map(|info| (*info.public(), info.addr())),
         )
         .await;
 
@@ -225,9 +210,9 @@ mod test {
     async fn tob_shutdown() {
         init_logger();
 
-        let (exit_dir, handle_dir, dir_info) = setup_dir(next_test_ip4()).await;
+        let (exit_dir, handle_dir, _) = setup_dir(next_test_ip4()).await;
         let (exit_tob, handle_tob, _) =
-            setup_tob(next_test_ip4(), Exchanger::random(), &dir_info, 0).await;
+            setup_tob(next_test_ip4(), Exchanger::random(), vec!()).await;
 
         wait_for_server(exit_tob, handle_tob).await;
         wait_for_server(exit_dir, handle_dir).await;

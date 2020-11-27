@@ -48,10 +48,6 @@ pub fn get_example_rt() -> RuleTransaction {
 }
 
 pub struct SetupConfig {
-    pub dir_info: DirectoryInfo,
-    pub dir_exit: Sender<()>,
-    pub dir_handle: JoinHandle<()>,
-
     pub tob_info: DirectoryInfo,
     pub tob_exit: Sender<()>,
     pub tob_handle: JoinHandle<()>,
@@ -67,8 +63,6 @@ impl SetupConfig {
             panic!("SetupConfig must be setup with at least 1 core node");
         }
 
-        let (dir_exit, dir_handle, dir_info) = setup_dir(next_test_ip4()).await;
-
         let tob_addr = next_test_ip4();
 
         let tob_exchanger = Exchanger::random();
@@ -77,7 +71,6 @@ impl SetupConfig {
         let corenodes = future::join_all(prefix_lists.drain(..).map(|p_list| {
             setup_corenode(
                 next_test_ip4(),
-                &dir_info,
                 &tob_info,
                 dt.clone(),
                 h_len,
@@ -86,15 +79,13 @@ impl SetupConfig {
         }))
         .await;
 
+        let corenodes_info = corenodes.iter().map(|x| x.2).collect();
+
         // must setup tob AFTER corenodes (tob waits for corenodes to join directory)
         let (tob_exit, tob_handle, tob_info) =
-            setup_tob(tob_addr, tob_exchanger, &dir_info, nr_peer).await;
+            setup_tob(tob_addr, tob_exchanger, corenodes_info).await;
 
         Self {
-            dir_info,
-            dir_exit,
-            dir_handle,
-
             tob_info,
             tob_exit,
             tob_handle,
@@ -110,8 +101,6 @@ impl SetupConfig {
             panic!("SetupConfig must be setup with at least 1 core node");
         }
 
-        let (dir_exit, dir_handle, dir_info) = setup_dir(next_test_ip4()).await;
-
         let tob_addr = next_test_ip4();
 
         let tob_exchanger = Exchanger::random();
@@ -120,7 +109,6 @@ impl SetupConfig {
         let corenodes = future::join_all(prefix_lists.drain(..).map(|p_list| {
             setup_corenode(
                 next_test_ip4(),
-                &dir_info,
                 &tob_info,
                 dt.clone(),
                 h_len,
@@ -129,15 +117,13 @@ impl SetupConfig {
         }))
         .await;
 
+        let corenodes_info = corenodes.iter().map(|x| x.2).collect::<Vec<DirectoryInfo>>()[0..nr_peer_tob].to_vec();
+
         // must setup tob AFTER corenodes (tob waits for corenodes to join directory)
         let (tob_exit, tob_handle, tob_info) =
-            setup_tob(tob_addr, tob_exchanger, &dir_info, nr_peer_tob).await;
+            setup_tob(tob_addr, tob_exchanger, corenodes_info).await;
 
         Self {
-            dir_info,
-            dir_exit,
-            dir_handle,
-
             tob_info,
             tob_exit,
             tob_handle,
@@ -151,20 +137,18 @@ impl SetupConfig {
             wait_for_server(exit, handle).await;
         }
         wait_for_server(self.tob_exit, self.tob_handle).await;
-        wait_for_server(self.dir_exit, self.dir_handle).await;
     }
 }
 
 pub async fn setup_corenode<I: Into<Prefix>>(
     server_addr: SocketAddr,
-    dir_info: &DirectoryInfo,
     tob_info: &DirectoryInfo,
     dt: DataTree,
     h_len: usize,
     mut prefix_list: Vec<I>,
 ) -> (Sender<()>, JoinHandle<()>, DirectoryInfo) {
     let (core_server, exit_tx) =
-        CoreNode::new(server_addr, dir_info, tob_info, dt, h_len, 
+        CoreNode::new(server_addr, tob_info, dt, h_len, 
             prefix_list.drain(..).map(|x| x.into()).collect())
             .await
             .expect("core node creation failed");
@@ -204,10 +188,9 @@ pub async fn setup_dir(
 pub async fn setup_tob(
     tob_addr: SocketAddr,
     exchanger: Exchanger,
-    dir_info: &DirectoryInfo,
-    nr_peer: usize,
+    corenodes_info: Vec<DirectoryInfo>,
 ) -> (Sender<()>, JoinHandle<()>, DirectoryInfo) {
-    let (tob_server, exit_tx) = TobServer::new(tob_addr, exchanger, dir_info, nr_peer)
+    let (tob_server, exit_tx) = TobServer::new(tob_addr, exchanger, corenodes_info)
         .await
         .expect("tob server creation failed");
 
