@@ -104,10 +104,8 @@ impl Prefix {
         // Compare last incomplete byte
         if min_remainder > 0 {
             let (byte_a, byte_b) = (self.key[full_byte_count], other.key[full_byte_count]);
-            info!("byte_a: {}, byte_b: {}, min_remainder: {}", byte_a, byte_b, min_remainder);
             let byte_a = (byte_a >> (8-min_remainder)) << (8-min_remainder);
             let byte_b = (byte_b >> (8-min_remainder)) << (8-min_remainder);
-            info!("byte_a: {}, byte_b: {}", byte_a, byte_b);
             match byte_a.cmp(&byte_b) {
                 std::cmp::Ordering::Equal => (),
                 _ => return false,

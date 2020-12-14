@@ -488,7 +488,6 @@ mod test {
         config.tear_down().await;
     }
 
-    // Test is failing because client hasn't been updated to use prefixes instead of 'closest'
     #[tokio::test(threaded_scheduler)]
     async fn request_in_ancient_history() {
         init_logger();
@@ -733,6 +732,66 @@ mod test {
                 )
                 .await
                 .expect("error sending request");
+        }
+        .instrument(trace_span!("get_merkle_proofs"))
+        .await;
+
+        config.tear_down().await;
+    }
+
+    use std::time::{Instant};
+
+    #[tokio::test]
+    async fn merkle_proof_time() {
+        init_logger();
+        let nr_peer = 3;
+
+        let filename =
+            "contract_test/target/wasm32-wasi/release/contract_test.wasm";
+        let rule_buffer =
+            std::fs::read(filename).expect("could not load file into buffer");
+
+        let mut t = DataTree::new();
+        let records = [
+            "Alice", "Bob", "Charlie", "Dave", "Aaron", "Vanessa", "Justin",
+            "Irina",
+        ];
+        for &k in records.iter() {
+            t.insert(String::from(k), (1000i32).to_be_bytes().to_vec());
+        }
+        t.insert("transfer_rule".to_string(), rule_buffer);
+
+        let config = SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 2).await;
+        let corenodes_info: Vec<DirectoryInfo> = config.corenodes.iter().map(|x| x.2.clone()).collect();
+        let tob_info = &config.tob_info;
+
+        info!("Corenodes: {:?}", corenodes_info);
+
+        async move {
+            let client_node_1 = ClientNode::new(tob_info, corenodes_info, get_balanced_prefixes(nr_peer))
+                .expect("client node 1 creation failed");
+
+            let mut v: Vec<Instant> = vec!(Instant::now());
+
+            for _ in 1i32..100i32 {
+                let _ = client_node_1
+                .get_merkle_proofs(vec![
+                    "Alice".to_string(),
+                    "Bob".to_string(),
+                    // "transfer_rule".to_string(),
+                ])
+                .await
+                .expect("merkle proof error");
+
+                v.push(Instant::now());
+            }
+
+            let mut vd: Vec<Duration> = vec!();
+            for i in 0..v.len()-1 {
+                vd.push(v[i+1]-v[i])
+            }
+
+            info!("Average: {:?}\nDurations: {:?}", (*v.last().unwrap()-*v.first().unwrap())/100, vd)
         }
         .instrument(trace_span!("get_merkle_proofs"))
         .await;
