@@ -194,14 +194,27 @@ where
     K: Serialize + Clone + Eq + Hash + Debug,
     V: Serialize + Clone + Eq + Debug,
 {
+    // The Merkle tree holding the data
     pub tree: Tree<K, V>,
 
+    // History of records touched (read or write) per operation
+    // We use Arc<K> to reduce the memory usage of duplicated keys
     pub touches: VecDeque<Vec<Arc<K>>>,
+    // Optimizes search for duplicate keys when pushing to the 'touches' queue
     pub counts: HashSet<Arc<K>>,
+
+    // The root hashes corresponding to the history (evolution) of the Merkle tree
     pub history: VecDeque<Digest>,
+    // The current time (= number of operations performed on the 'genesis' tree)
     pub history_count: usize,
+    // The history length. How far back 'in time' we remember records not covered
+    // by the prefix_list. 'Expiring' records are replaced with placeholders in the
+    // tree. A history lenght of 1 is equivalent to only remembering records covered
+    // by the prefix_list (only remembers the latest tree - the present).
     history_len: usize,
 
+    // The list of prefixes covered by this tree. Records under these prefixes can
+    // always be retrieved from the tree (never replaced with placeholders).
     pub prefix_list: Vec<Prefix>,
 }
 

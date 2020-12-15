@@ -791,7 +791,8 @@ mod test {
                 vd.push(v[i+1]-v[i])
             }
 
-            info!("Average: {:?}\nDurations: {:?}", (*v.last().unwrap()-*v.first().unwrap())/100, vd)
+            vd.sort();
+            info!("Median: {:?}\nDurations: {:?}", vd.get(50).unwrap(), vd)
         }
         .instrument(trace_span!("get_merkle_proofs"))
         .await;

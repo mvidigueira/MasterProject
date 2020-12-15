@@ -53,24 +53,29 @@ impl std::fmt::Display for MemoryReport {
         self.o_touches_hashset + self.o_touches_data + 
         self.o_history_queue + self.o_prefix_list;
 
+        let o_sum_data_dependent = self.o_tree_serialized;
+
         write!(f, "Memory usage decomposition:
-        - History tree ------------------------ {} B
+        Data independent overhead total: ------ {} B
+          - History tree (structs) ------------ {} B
           - Touched records queue: ------------ {} B
           - Touched records hashset: ---------- {} B
           - Touched records data: ------------- {} B
           - Tree root history queue: ---------- {} B
           - Prefix list ----------------------- {} B
-        Data independent overhead total: ------ {} B
+          
+        Data overhead total: ------------------ {} B
           - Merkle tree (serialized) ---------- {} B
         
         Total memory: ------------------------- {} B",
+        o_sum_data_independent,
         self.o_h_tree, 
         self.o_touches_queue,
         self.o_touches_hashset, 
         self.o_touches_data,
         self.o_history_queue,
-        self.o_prefix_list, 
-        o_sum_data_independent, 
+        self.o_prefix_list,
+        o_sum_data_dependent,
         self.o_tree_serialized, 
         o_sum_data_independent + self.o_tree_serialized)
     }

@@ -14,10 +14,9 @@ pub use history_tree::Prefix;
 
 use std::io::Error as IoError;
 
-use drop::crypto::{self, Digest};
 use drop::error::Error;
 use drop::net::{
-    ConnectError, DirectoryInfo, ListenerError, ReceiveError, SendError,
+    ConnectError, ListenerError, ReceiveError, SendError,
 };
 
 use merkle::{error::MerkleError, Tree};
@@ -91,27 +90,6 @@ impl classic::Message for TxRequest {}
 unsafe impl Send for TxResponse {}
 unsafe impl Sync for TxResponse {}
 impl classic::Message for TxResponse {}
-
-fn closest<'a>(
-    sorted_corenodes: &'a Vec<(Digest, DirectoryInfo)>,
-    key: &RecordID,
-) -> &'a DirectoryInfo {
-    let key_d = crypto::hash(key).unwrap();
-    let r = sorted_corenodes
-        .binary_search_by_key(key_d.as_ref(), |x| *x.0.as_ref());
-    match r {
-        Ok(i) => &sorted_corenodes[i].1,
-        Err(i) => {
-            if sorted_corenodes.len() <= i {
-                &sorted_corenodes.last().unwrap().1
-            } else if i == 0 {
-                &sorted_corenodes.last().unwrap().1
-            } else {
-                &sorted_corenodes[i - 1].1
-            }
-        }
-    }
-}
 
 #[derive(
     classic::Serialize, classic::Deserialize, Debug, Clone, Hash, PartialEq, Eq,
