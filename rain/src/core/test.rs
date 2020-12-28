@@ -18,6 +18,9 @@ use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 use futures::future;
 
+use rand::prelude::SliceRandom;
+use rand::Rng;
+
 static PORT_OFFSET: AtomicU16 = AtomicU16::new(0);
 
 /// Initialize an asynchronous logger for test environment
@@ -247,6 +250,50 @@ pub fn get_balanced_prefixes(n: usize) -> Vec<Vec<Prefix>> {
     list
 }
 
+
+// This function creates n/coverage groups each covering a different set of prefixes.
+// Each group is assigned at least 'coverage' different nodes at random, making it so
+// every prefix (in every group) is covered by at least 'coverage' different nodes.
+// This distribution can tolerate '(coverage - 1) / 2' byzantine failures (optimal).
+// The 'granularity' affects the number of prefixes assigned to each shard. Higher
+// granularity tends to decrease the difference in relative size of each shard (more balanced).
+// (Recommendation: granularity >= n)
+pub fn get_prefixes_bft(n: usize, coverage: usize, granularity: usize) -> Vec<Vec<Prefix>> {
+    if n < coverage {
+        panic!("number of nodes must be greater or equal to coverage");
+    }
+
+    let mut prefixes: Vec<Prefix> = get_balanced_prefixes(granularity).drain(..).map(|mut x| x.pop().unwrap()).collect();
+    let mut rng = rand::thread_rng();
+    prefixes.shuffle(&mut rng);
+
+    let num_groups = n/coverage;
+
+    let mut temp_list: Vec<Vec<Prefix>> = vec![vec!(); num_groups];
+    let mut final_list: Vec<Vec<Prefix>> = vec!();
+
+
+    let mut i = 0;
+    for p in prefixes {
+        temp_list[i].push(p);
+        i = (i + 1) % num_groups;
+    }
+
+    let remainder = n%coverage;
+    for i in 0..remainder {
+        final_list.push(temp_list[i].clone());
+    }
+    for l in temp_list {
+        for _ in 0..coverage {
+            final_list.push(l.clone());
+        }
+    }
+
+    final_list.shuffle(&mut rng);
+
+    final_list
+}
+
 #[tokio::test]
 async fn config_setup_teardown() {
     init_logger();
@@ -254,8 +301,3 @@ async fn config_setup_teardown() {
     let config = SetupConfig::setup(vec!(vec!("0"), vec!("0"), vec!("0"), vec!("0"), vec!("0")), DataTree::new(), 1).await;
     config.tear_down().await;
 }
-
-// #[test]
-// fn balanced() {
-//     println!("{:?}", get_balanced_prefixes(3));
-// }

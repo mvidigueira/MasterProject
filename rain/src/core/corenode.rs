@@ -138,11 +138,6 @@ impl CoreNode {
             .await
             .expect("listen failed");
 
-        // let connector = TcpConnector::new(exchanger.clone());
-        // let dir_listener =
-        //     DirectoryListener::new(listener, connector, dir_info.addr())
-        //         .await?;
-
         let mut h_tree = HistoryTree::new(
             history_len,
             prefix_list,
@@ -200,14 +195,14 @@ impl CoreNode {
 
             if peer_pub == Some(self.tob_pub_key) {
                 info!(
-                    "new directory connection from TOB server: {}",
+                    "TOB server connection: {}",
                     peer_addr
                 );
             } else {
-                info!("new directory connection from client {}", peer_addr);
+                info!("CLIENT connection {}", peer_addr);
             }
 
-            let from_client = peer_addr != self.tob_addr;
+            let from_client = peer_pub != Some(self.tob_pub_key);
             task::spawn(
                 async move {
                     let request_handler = TxRequestHandler::new(connection, data, from_client);
@@ -411,17 +406,17 @@ impl TxRequestHandler {
                 TxRequest::GetProof(records) => {
                     info!("Received getproof request. Arguments {:?}", records);
 
-                    // if self.from_client {
-                    let guard = self.data.read().await;
-                    Self::handle_get_proof(
-                        guard,
-                        &mut self.connection,
-                        records.clone(),
-                    )
-                    .await?;
-                    // } else {
-                    //     error!("TxRequest::GetProof should be sent directly by a client, not via TOB!");
-                    // }
+                    if self.from_client {
+                        let guard = self.data.read().await;
+                        Self::handle_get_proof(
+                            guard,
+                            &mut self.connection,
+                            records.clone(),
+                        )
+                        .await?;
+                    } else {
+                        error!("TxRequest::GetProof should be sent directly by a client, not via TOB!");
+                    }
 
                     info!(
                         "Replying to getproof request. Arguments {:?}",
@@ -434,12 +429,12 @@ impl TxRequestHandler {
                         rt.rule_record_id
                     );
 
-                    // if self.from_client {
-                    //     error!("Client attempting to execute directly. TxExecute can only come from TOB!");
-                    // } else {
-                    TxRequestHandler::handle_execute(&mut self.data, rt)
-                        .await?;
-                    // }
+                    if self.from_client {
+                        error!("Client attempting to execute directly. TxExecute can only come from TOB!");
+                    } else {
+                        TxRequestHandler::handle_execute(&mut self.data, rt)
+                            .await?;
+                    }
                 }
             }
         }

@@ -510,18 +510,14 @@ where
             // p.includes(target) OR target.includes(p) 
             // (emphasis on the second part)
             for p in prefix_list {
-                info!("p: {:?}, target: {:?}", p, target);
                 if p.includes(target) {
-                    info!("is_close: true. p includes target");
                     return true;
                 }
                 if target.includes(p) {
-                    info!("is_close: true. target includes p");
                     return true;
                 }
             }
 
-            info!("is_close: false");
             return false;
         };
 
@@ -531,7 +527,6 @@ where
             std::cmp::max(self.history_count + 1 - self.history_len, 0);
         for k in touched_records {
             if self.prefix_list.len() > 0 {
-                info!("Trying to replace: {:?}", k.as_ref());
                 self.tree.replace_with_placeholder(
                     k.as_ref(),
                     last_recent_history,
