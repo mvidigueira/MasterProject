@@ -34,8 +34,6 @@ pub fn get_input(v: Vec<u8>) -> (Ledger, Args) {
 }
 
 pub type ContextLedger = HashMap<String, i32>;
-pub type ContextLedger2 = HashMap<String, (i32, (PublicKey, i32))>;
-
 
 pub fn to_context_ledger(l: Ledger) -> ContextLedger {
     let mut cl = ContextLedger::default();
@@ -56,6 +54,8 @@ pub fn to_ledger(cl: ContextLedger) -> Ledger {
     }
     l
 }
+
+pub type ContextLedger2 = HashMap<String, (i32, (PublicKey, i32))>;
 
 pub fn to_context_ledger_2(l: Ledger) -> ContextLedger2 {
     let mut cl = ContextLedger2::default();
