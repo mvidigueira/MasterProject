@@ -1,0 +1,25 @@
+[package]
+name = "contract_test_2"
+version = "0.1.0"
+authors = ["mvidigueira <mvidigueira@gmail.com>"]
+edition = "2018"
+
+[lib]
+crate-type = ['cdylib']
+
+[profile.release]
+lto = true
+opt-level = 3
+panic = "abort"
+debug = false
+
+[features]
+
+[dependencies]
+wasm_common_bindings = { path="../common" }
+bincode = "=1.2.1"
+
+[dependencies.ed25519-dalek]
+version = "1.0.1"
+features = ["serde"]
+

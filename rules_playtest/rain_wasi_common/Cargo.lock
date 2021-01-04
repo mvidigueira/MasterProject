@@ -35,16 +35,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4785bdd1c96b2a846b2bd7cc02e86b6b3dbf14e7e53446c4f54c92a361040822"
 
 [[package]]
-name = "common"
-version = "0.1.0"
-dependencies = [
- "base64",
- "bincode",
- "serde",
- "wasm-bindgen",
-]
-
-[[package]]
 name = "itoa"
 version = "0.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -81,6 +71,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "053a8c8bcc71fcce321828dc897a98ab9760bef03a4fc36693c231e5b3216cfe"
 dependencies = [
  "proc-macro2",
+]
+
+[[package]]
+name = "rain_wasi_common"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "bincode",
+ "serde",
+ "wasm-bindgen",
 ]
 
 [[package]]

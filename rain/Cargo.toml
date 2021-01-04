@@ -6,12 +6,18 @@ edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[features]
+jit = []
+cranelift = []
+singlepass = []
+llvm = []
+native = []
+
 [dependencies]
-# drop = { path = "/home/manuel/Documents/M4/rust_playground/drop" }
 drop = { git = "https://github.com/Distributed-EPFL/drop", branch = "feature/io" }
 macros = { git = "https://github.com/Distributed-EPFL/drop", branch= "feature/io" }
 merkle = { path = "../merkle" }
-rain_wasi_common = { path = "../rules_playtest/rain_wasi_common" }
+wasm_common_bindings = { path="common" }
 rain_wasmtime_contract = { path = "../rules_playtest/rain_wasmtime_contract" }
 classic = { git = "https://github.com/Distributed-EPFL/classic" }
 serde = "1.0.102"
@@ -19,11 +25,16 @@ tokio = "0.2.0"
 futures = "0.3.4"
 tracing = "0.1.13"
 tracing-futures = "0.2.3"
-bincode = "1.2.1"
+bincode = "1.3.1"
 log = "0.4"
 base64 = "0.11.0"
 rand = "0.7.3"
 tester = "0.7.0"
+wasmer = "1.0.0-rc"
+wasmer-compiler-llvm = "1.0.0-rc"
+wasmer-compiler-singlepass = "1.0.0-rc"
+wasmer-compiler-cranelift = "1.0.0-rc"
+wasmer-engine-native = "1.0.0-rc1"
 
 [dev-dependencies]
 tracing-subscriber = "*"

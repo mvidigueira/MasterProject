@@ -240,7 +240,7 @@ mod test {
         let nr_peer = 1;
 
         let filename =
-            "contract_test/target/wasm32-wasi/release/contract_test.wasm";
+            "contract_3/target/wasm32-unknown-unknown/release/contract_test.wasm";
         let rule_buffer =
             std::fs::read(filename).expect("could not load file into buffer");
 
@@ -306,7 +306,7 @@ mod test {
         let nr_peer = 1;
 
         let filename =
-            "contract_test/target/wasm32-wasi/release/contract_test.wasm";
+            "contract_3/target/wasm32-unknown-unknown/release/contract_test.wasm";
         let rule_buffer =
             std::fs::read(filename).expect("could not load file into buffer");
 
@@ -406,7 +406,7 @@ mod test {
         let nr_peer = 1;
 
         let filename =
-            "contract_test/target/wasm32-wasi/release/contract_test.wasm";
+            "contract_3/target/wasm32-unknown-unknown/release/contract_test.wasm";
         let rule_buffer =
             std::fs::read(filename).expect("could not load file into buffer");
 
@@ -494,7 +494,7 @@ mod test {
         let nr_peer = 3;
 
         let filename =
-            "contract_test/target/wasm32-wasi/release/contract_test.wasm";
+            "contract_3/target/wasm32-unknown-unknown/release/contract_test.wasm";
         let rule_buffer =
             std::fs::read(filename).expect("could not load file into buffer");
 
@@ -600,7 +600,7 @@ mod test {
         let nr_peer = 3;
 
         let filename =
-            "contract_test/target/wasm32-wasi/release/contract_test.wasm";
+            "contract_3/target/wasm32-unknown-unknown/release/contract_test.wasm";
         let rule_buffer =
             std::fs::read(filename).expect("could not load file into buffer");
 
@@ -747,7 +747,7 @@ mod test {
         let nr_peer = 3;
 
         let filename =
-            "contract_test/target/wasm32-wasi/release/contract_test.wasm";
+            "contract_3/target/wasm32-unknown-unknown/release/contract_test.wasm";
         let rule_buffer =
             std::fs::read(filename).expect("could not load file into buffer");
 
@@ -806,7 +806,7 @@ mod test {
         let nr_peer = 5;
 
         let filename =
-            "contract_test/target/wasm32-wasi/release/contract_test.wasm";
+            "contract_3/target/wasm32-unknown-unknown/release/contract_test.wasm";
         let rule_buffer =
             std::fs::read(filename).expect("could not load file into buffer");
 
@@ -916,7 +916,7 @@ mod test {
         let nr_peer = 1;
 
         let filename =
-            "contract_test/target/wasm32-wasi/release/contract_test.wasm";
+            "contract_3/target/wasm32-unknown-unknown/release/contract_test.wasm";
         let rule_buffer =
             std::fs::read(filename).expect("could not load file into buffer");
 

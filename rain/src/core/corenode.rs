@@ -26,10 +26,37 @@ use tokio::task;
 use tracing::{error, info, trace_span};
 use tracing_futures::Instrument;
 
-use rain_wasi_common::{Ledger, WasiSerializable};
-use rain_wasmtime_contract::WasmContract;
 
-use super::simulated_contract;
+// use rain_wasi_common::{Ledger, WasiSerializable};
+// use rain_wasmtime_contract::WasmContract;
+use wasm_common_bindings::{ContextLedger, Ledger};
+// use wasmer_runtime::{imports, Func, memory::MemoryView};
+
+use wasmer::{Store, JIT, Module, Instance, NativeFunc, MemoryView, imports};
+use wasmer_compiler_llvm::LLVM;
+use wasmer_compiler_singlepass::Singlepass;
+use wasmer_compiler_cranelift::Cranelift;
+use wasmer_engine_native::Native;
+
+fn get_store() -> Store {
+    // The default backend
+    let compiler = Cranelift::default();
+    
+    #[cfg(feature = "singlepass")]
+    let compiler = Singlepass::new();
+    
+    #[cfg(feature = "llvm")]
+    let compiler = LLVM::new();
+
+    // The default compiler
+    #[cfg(not(feature = "native"))]
+    let store = Store::new(&JIT::new(compiler).engine());
+
+    #[cfg(feature = "native")]
+    let store = Store::new(&Native::new(compiler).engine());
+
+    store
+}
 
 use std::mem;
 
@@ -291,17 +318,14 @@ impl TxRequestHandler {
                 return Err(());
             }
             Ok(bytes) => {
-                let mut contract = match WasmContract::load_bytes(bytes) {
+                let store = get_store();
+                let module = match Module::new(&store, &bytes) {
                     Err(e) => {
-                        error!("Error processing transaction: error loading wasi contract: {:?}", e);
-                        return Err(()); // refactor: change this to Err
+                        error!("Error processing transaction: error loading module: {:?}", e);
+                        return Err(());
                     }
-                    Ok(c) => c,
+                    Ok(m) => m,
                 };
-
-                let args = rain_wasi_common::serialize_args_from_byte_vec(
-                    args,
-                );
 
                 // removes (k,v) association of rule, for performance
                 let input_ledger: Ledger = tree
@@ -310,19 +334,71 @@ impl TxRequestHandler {
                     .filter(|(k, _)| k != rule_id)
                     .collect();
 
-                // Execute the transaction in the wasm runtime
-                let result =
-                    &contract.execute(input_ledger.serialize_wasi(), args);
-
-                // let result =
-                //     &self.simulate_transaction(input_ledger.serialize_wasi(), args);
-
-                // Extract the result
-                let output_ledger = match rain_wasi_common::extract_result(
-                    result,
-                ) {
+                let import_object = imports! {};
+                let instance = match Instance::new(&module, &import_object) {
                     Err(e) => {
-                        error!("Error processing transaction: contract output an error: {}", e);
+                        error!("Error processing transaction: error instantiating module: {:?}", e);
+                        return Err(());
+                    }
+                    Ok(i) => i,
+                };
+
+                let allocate: NativeFunc<i32, i32> = match instance.exports
+                .get_native_function("allocate_vec") {
+                    Err(e) => {
+                        error!("Error finding mandatory 'allocate_vec' function in wasm module: {:?}", e);
+                        return Err(());
+                    }
+                    Ok(alloc) => alloc,
+                };
+
+                let execute: NativeFunc<(i32, i32), i32> = match instance.exports
+                .get_native_function("execute") {
+                    Err(e) => {
+                        error!("Error finding mandatory 'execute' function in wasm module: {:?}", e);
+                        return Err(());
+                    }
+                    Ok(exec) => exec,
+                };
+
+                let input = bincode::serialize(&(input_ledger, args.clone())).unwrap();
+                let len = input.len();
+
+                let ptr = match allocate.call(len as i32) {
+                    Ok(ptr) => ptr,
+                    Err(e) => {
+                        error!("Call to 'allocate' in wasm module failed: {:?}", e);
+                        return Err(());
+                    }
+                };
+
+                let mem = match instance.exports.get_memory("memory") {
+                    Ok(m) => m,
+                    Err(e) => {
+                        error!("Error finding default memory 'memory' wasm module: {:?}", e);
+                        return Err(());
+                    }
+                };
+
+                let s: MemoryView<u8>  = mem.view();
+
+                for (i, v) in input.iter().enumerate() {
+                    s[ptr as usize + i].replace(*v);
+                }
+
+                let ptr = match execute.call(ptr, len as i32) {
+                    Ok(ptr) => ptr,
+                    Err(e) => {
+                        error!("Call to 'execute' in wasm module failed: {:?}", e);
+                        return Err(());
+                    }
+                };
+                let s: MemoryView<u8>  = mem.view();
+
+                let s = s[..].iter().map(|x| x.get()).collect::<Vec<u8>>();
+                let output_ledger = match wasm_common_bindings::get_result(&s, ptr) {
+                    Err(_) => {
+                        error!("Error deserializing output from transaction.");
                         return Err(());
                     }
                     Ok(l) => l,
@@ -409,10 +485,10 @@ impl TxRequestHandler {
         Ok(())
     }
 
-    fn simulate_transaction(&self, ledger: String, args: String) -> String {
-        // simulated_contract::execute(ledger, args)
-        simulated_contract::set_record_value(ledger, args)
-    }
+    // fn simulate_transaction(&self, ledger: String, args: String) -> String {
+    //     // simulated_contract::execute(ledger, args)
+    //     // simulated_contract::set_record_value(ledger, args)
+    // }
 
     async fn serve(mut self) -> Result<(), CoreNodeError> {
         while let Ok(txr) = self.connection.receive::<TxRequest>().await {
@@ -592,116 +668,116 @@ mod test {
         t
     }
 
-    fn handle_execute(
-        htree: &mut HTree,
-        rt: &RuleTransaction,
-    ) -> Result<(), CoreNodeError> {
-        let used_record_count: usize = rt.merkle_proof.len();
-        if used_record_count > RECORD_LIMIT {
-            panic!("Error processing transaction: record limit exceeded. Limit is {}, rule touches {}", RECORD_LIMIT, used_record_count);
-        }
+    // fn handle_execute(
+    //     htree: &mut HTree,
+    //     rt: &RuleTransaction,
+    // ) -> Result<(), CoreNodeError> {
+    //     let used_record_count: usize = rt.merkle_proof.len();
+    //     if used_record_count > RECORD_LIMIT {
+    //         panic!("Error processing transaction: record limit exceeded. Limit is {}, rule touches {}", RECORD_LIMIT, used_record_count);
+    //     }
 
-        if rt.touched_records.len() > RECORD_LIMIT {
-            panic!("Error processing transaction: record limit exceeded. Limit is {}, rule touches {}", RECORD_LIMIT, rt.touched_records.len());
-        }
+    //     if rt.touched_records.len() > RECORD_LIMIT {
+    //         panic!("Error processing transaction: record limit exceeded. Limit is {}, rule touches {}", RECORD_LIMIT, rt.touched_records.len());
+    //     }
 
-        if !htree
-            .consistent_given_records(&rt.merkle_proof, &rt.touched_records)
-        {
-            panic!("Error processing transaction: invalid merkle proof");
-        }
+    //     if !htree
+    //         .consistent_given_records(&rt.merkle_proof, &rt.touched_records)
+    //     {
+    //         panic!("Error processing transaction: invalid merkle proof");
+    //     }
 
-        match rt.merkle_proof.get(&rt.rule_record_id) {
-            Err(_) => {
-                panic!("Error processing transaction: rule is missing from merkle proof");
-            }
-            Ok(bytes) => {
-                let mut contract = match WasmContract::load_bytes(bytes) {
-                    Err(e) => {
-                        panic!("Error processing transaction: error loading wasi contract: {:?}", e);
-                    }
-                    Ok(c) => c,
-                };
+    //     match rt.merkle_proof.get(&rt.rule_record_id) {
+    //         Err(_) => {
+    //             panic!("Error processing transaction: rule is missing from merkle proof");
+    //         }
+    //         Ok(bytes) => {
+    //             let mut contract = match WasmContract::load_bytes(bytes) {
+    //                 Err(e) => {
+    //                     panic!("Error processing transaction: error loading wasi contract: {:?}", e);
+    //                 }
+    //                 Ok(c) => c,
+    //             };
 
-                let args = rain_wasi_common::serialize_args_from_byte_vec(
-                    &rt.rule_arguments,
-                );
+    //             let args = rain_wasi_common::serialize_args_from_byte_vec(
+    //                 &rt.rule_arguments,
+    //             );
 
-                // removes (k,v) association of rule, for performance
-                let input_ledger: Ledger = rt
-                    .merkle_proof
-                    .clone_to_vec()
-                    .into_iter()
-                    .filter(|(k, _)| k != &rt.rule_record_id)
-                    .collect();
+    //             // removes (k,v) association of rule, for performance
+    //             let input_ledger: Ledger = rt
+    //                 .merkle_proof
+    //                 .clone_to_vec()
+    //                 .into_iter()
+    //                 .filter(|(k, _)| k != &rt.rule_record_id)
+    //                 .collect();
 
-                // Execute the transaction in the wasm runtime
-                let result =
-                    &contract.execute(input_ledger.serialize_wasi(), args);
+    //             // Execute the transaction in the wasm runtime
+    //             let result =
+    //                 &contract.execute(input_ledger.serialize_wasi(), args);
 
-                // // Execute the transaction in the wasm runtime
-                // let result =
-                //     &self.simulate_transaction(input_ledger.serialize_wasi(), args);
+    //             // // Execute the transaction in the wasm runtime
+    //             // let result =
+    //             //     &self.simulate_transaction(input_ledger.serialize_wasi(), args);
 
-                // Extract the result
-                let _ = match rain_wasi_common::extract_result(result) {
-                    Err(e) => {
-                        panic!("Error processing transaction: contract output an error: {}", e);
-                    }
-                    Ok(l) => l,
-                };
+    //             // Extract the result
+    //             let _ = match rain_wasi_common::extract_result(result) {
+    //                 Err(e) => {
+    //                     panic!("Error processing transaction: contract output an error: {}", e);
+    //                 }
+    //                 Ok(l) => l,
+    //             };
 
-                htree.merge_consistent(&rt.merkle_proof, &rt.touched_records);
-            }
-        }
+    //             htree.merge_consistent(&rt.merkle_proof, &rt.touched_records);
+    //         }
+    //     }
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 
-    #[bench]
-    fn bench_handle_execute(b: &mut Bencher) {
-        let filename =
-            "contract_test/target/wasm32-wasi/release/contract_test.wasm";
-        let rule_buffer =
-            std::fs::read(filename).expect("could not load file into buffer");
+    // #[bench]
+    // fn bench_handle_execute(b: &mut Bencher) {
+    //     let filename =
+    //         "contract_test/target/wasm32-wasi/release/contract_test.wasm";
+    //     let rule_buffer =
+    //         std::fs::read(filename).expect("could not load file into buffer");
 
-        let mut t = DataTree::new();
-        let records = [
-            "Alice", "Bob", "Charlie", "Dave", "Aaron", "Vanessa", "Justin",
-            "Irina",
-        ];
-        for &k in records.iter() {
-            t.insert(String::from(k), (1000i32).to_be_bytes().to_vec());
-        }
-        t.insert("transfer_rule".to_string(), rule_buffer);
+    //     let mut t = DataTree::new();
+    //     let records = [
+    //         "Alice", "Bob", "Charlie", "Dave", "Aaron", "Vanessa", "Justin",
+    //         "Irina",
+    //     ];
+    //     for &k in records.iter() {
+    //         t.insert(String::from(k), (1000i32).to_be_bytes().to_vec());
+    //     }
+    //     t.insert("transfer_rule".to_string(), rule_buffer);
 
-        let mut h_tree = HistoryTree::new(
-            5,
-            vec![]
-        );
+    //     let mut h_tree = HistoryTree::new(
+    //         5,
+    //         vec![]
+    //     );
 
-        for (k, v) in t.clone_to_vec().drain(..) {
-            h_tree.add_touch(&k);
-            h_tree.insert(k, v);
-        }
-        h_tree.push_history();
+    //     for (k, v) in t.clone_to_vec().drain(..) {
+    //         h_tree.add_touch(&k);
+    //         h_tree.insert(k, v);
+    //     }
+    //     h_tree.push_history();
 
-        let records = vec![
-            "Alice".to_string(),
-            "Bob".to_string(),
-            "transfer_rule".to_string(),
-        ];
+    //     let records = vec![
+    //         "Alice".to_string(),
+    //         "Bob".to_string(),
+    //         "transfer_rule".to_string(),
+    //     ];
 
-        let proof = get_proof_for_records(&h_tree, records.clone());
-        let args = ("Alice".to_string(), "Bob".to_string(), 50i32);
+    //     let proof = get_proof_for_records(&h_tree, records.clone());
+    //     let args = ("Alice".to_string(), "Bob".to_string(), 50i32);
 
-        let rt = RuleTransaction::new(
-            proof,
-            "transfer_rule".to_string(),
-            records,
-            &args,
-        );
+    //     let rt = RuleTransaction::new(
+    //         proof,
+    //         "transfer_rule".to_string(),
+    //         records,
+    //         &args,
+    //     );
 
-        b.iter(|| handle_execute(&mut h_tree, &rt));
-    }
+    //     b.iter(|| handle_execute(&mut h_tree, &rt));
+    // }
 }
