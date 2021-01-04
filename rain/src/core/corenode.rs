@@ -284,6 +284,55 @@ impl TxRequestHandler {
         Ok(())
     }
 
+    fn execute_transaction(rule_id: &String, /*rule_hash: &Digest, */args: &Vec<u8>, tree: &DataTree) -> Result<Ledger, ()> {
+        match tree.get(rule_id) {
+            Err(_) => {
+                error!("Error processing transaction: rule is missing from merkle proof");
+                return Err(());
+            }
+            Ok(bytes) => {
+                let mut contract = match WasmContract::load_bytes(bytes) {
+                    Err(e) => {
+                        error!("Error processing transaction: error loading wasi contract: {:?}", e);
+                        return Err(()); // refactor: change this to Err
+                    }
+                    Ok(c) => c,
+                };
+
+                let args = rain_wasi_common::serialize_args_from_byte_vec(
+                    args,
+                );
+
+                // removes (k,v) association of rule, for performance
+                let input_ledger: Ledger = tree
+                    .clone_to_vec()
+                    .into_iter()
+                    .filter(|(k, _)| k != rule_id)
+                    .collect();
+
+                // Execute the transaction in the wasm runtime
+                let result =
+                    &contract.execute(input_ledger.serialize_wasi(), args);
+
+                // let result =
+                //     &self.simulate_transaction(input_ledger.serialize_wasi(), args);
+
+                // Extract the result
+                let output_ledger = match rain_wasi_common::extract_result(
+                    result,
+                ) {
+                    Err(e) => {
+                        error!("Error processing transaction: contract output an error: {}", e);
+                        return Err(());
+                    }
+                    Ok(l) => l,
+                };
+
+                Ok(output_ledger)
+            }
+        }
+    }
+
     async fn handle_execute(
         data: &mut ProtectedTree,
         rt: RuleTransaction,
@@ -308,50 +357,16 @@ impl TxRequestHandler {
             return Ok(());
         }
 
-        match rt.merkle_proof.get(&rt.rule_record_id) {
-            Err(_) => {
-                error!("Error processing transaction: rule is missing from merkle proof");
-                return Ok(());
-            }
-            Ok(bytes) => {
-                let mut contract = match WasmContract::load_bytes(bytes) {
-                    Err(e) => {
-                        error!("Error processing transaction: error loading wasi contract: {:?}", e);
-                        return Ok(()); // refactor: change this to Err
-                    }
-                    Ok(c) => c,
-                };
-
-                let args = rain_wasi_common::serialize_args_from_byte_vec(
-                    &rt.rule_arguments,
-                );
-
-                // removes (k,v) association of rule, for performance
+        let res = TxRequestHandler::execute_transaction(&rt.rule_record_id, &rt.rule_arguments, &rt.merkle_proof);
+        match res {
+            Err(_) => return Ok(()),
+            Ok(mut output_ledger) => {
                 let mut input_ledger: Ledger = rt
-                    .merkle_proof
-                    .clone_to_vec()
-                    .into_iter()
-                    .filter(|(k, _)| k != &rt.rule_record_id)
-                    .collect();
-
-                // Execute the transaction in the wasm runtime
-                let result =
-                    &contract.execute(input_ledger.serialize_wasi(), args);
-
-                // // Execute the transaction in the wasm runtime
-                // let result =
-                //     &self.simulate_transaction(input_ledger.serialize_wasi(), args);
-
-                // Extract the result
-                let mut output_ledger = match rain_wasi_common::extract_result(
-                    result,
-                ) {
-                    Err(e) => {
-                        error!("Error processing transaction: contract output an error: {}", e);
-                        return Ok(());
-                    }
-                    Ok(l) => l,
-                };
+                .merkle_proof
+                .clone_to_vec()
+                .into_iter()
+                .filter(|(k, _)| k != &rt.rule_record_id)
+                .collect();
 
                 guard.merge_consistent(&rt.merkle_proof, &rt.touched_records);
 
@@ -382,14 +397,13 @@ impl TxRequestHandler {
                 let mut rep = guard.memory_usage_report();
                 // This is excluding the memory occupied by the operation.
                 // This should be unnecessary once merkle tree memory usage is accurately determined.
-                if rep.o_tree_serialized > bytes.len() {
-                    rep.o_tree_serialized -= bytes.len();
-                }
+                // if rep.o_tree_serialized > bytes.len() {
+                //     rep.o_tree_serialized -= bytes.len();
+                // }
                 info!("Transaction applied: local data successfully updated.
                 {}", rep);
             }
         }
-
         drop(guard);
 
         Ok(())
