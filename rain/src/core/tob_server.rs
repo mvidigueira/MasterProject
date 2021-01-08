@@ -41,9 +41,6 @@ impl TobServer {
             .await
             .expect("listen failed");
 
-        // debug!("waiting to connect to corenodes");
-        // debug!("Directory Info: {:#?}", dir_info);
-
         debug!("successfully connected to corenodes");
 
         let connector = TcpConnector::new(exchanger);

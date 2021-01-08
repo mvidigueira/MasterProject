@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use drop::crypto::key::exchange::Exchanger;
+use drop::crypto::{key::exchange::Exchanger, Digest};
 use drop::net::{Connector, DirectoryInfo, TcpConnector};
 
 use super::{
@@ -157,10 +157,11 @@ impl ClientNode {
         &self,
         proof: DataTree,
         rule: RecordID,
+        rule_version: Digest,
         touched_records: Vec<RecordID>,
         args: &T,
     ) -> Result<(), ClientError> {
-        let rt = RuleTransaction::new(proof, rule, touched_records, args);
+        let rt = RuleTransaction::new(proof, rule, rule_version, touched_records, args);
 
         let exchanger = Exchanger::random();
         let connector = TcpConnector::new(exchanger);
@@ -243,6 +244,7 @@ mod test {
             "contract_3/target/wasm32-unknown-unknown/release/contract_test.wasm";
         let rule_buffer =
             std::fs::read(filename).expect("could not load file into buffer");
+        let rule_digest = drop::crypto::hash(&rule_buffer).unwrap();
 
         let mut t = DataTree::new();
         t.insert("Alice".to_string(), (1000i32).to_be_bytes().to_vec());
@@ -273,6 +275,7 @@ mod test {
                 .send_transaction_request(
                     proof,
                     "transfer_rule".to_string(),
+                    rule_digest,
                     vec![
                         "Alice".to_string(),
                         "Bob".to_string(),
@@ -309,6 +312,7 @@ mod test {
             "contract_3/target/wasm32-unknown-unknown/release/contract_test.wasm";
         let rule_buffer =
             std::fs::read(filename).expect("could not load file into buffer");
+        let rule_digest = drop::crypto::hash(&rule_buffer).unwrap();
 
         let mut t = DataTree::new();
         t.insert("Alice".to_string(), (1000i32).to_be_bytes().to_vec());
@@ -351,6 +355,7 @@ mod test {
                 .send_transaction_request(
                     proof_1,
                     "transfer_rule".to_string(),
+                    rule_digest,
                     vec![
                         "Alice".to_string(),
                         "Bob".to_string(),
@@ -366,6 +371,7 @@ mod test {
                 .send_transaction_request(
                     proof_2,
                     "transfer_rule".to_string(),
+                    rule_digest,
                     vec![
                         "Charlie".to_string(),
                         "Dave".to_string(),
@@ -409,6 +415,7 @@ mod test {
             "contract_3/target/wasm32-unknown-unknown/release/contract_test.wasm";
         let rule_buffer =
             std::fs::read(filename).expect("could not load file into buffer");
+        let rule_digest = drop::crypto::hash(&rule_buffer).unwrap();
 
         let mut t = DataTree::new();
         t.insert("Alice".to_string(), (1000i32).to_be_bytes().to_vec());
@@ -449,6 +456,7 @@ mod test {
                 .send_transaction_request(
                     proof_1,
                     "transfer_rule".to_string(),
+                    rule_digest,
                     vec![
                         "Alice".to_string(),
                         "Bob".to_string(),
@@ -464,6 +472,7 @@ mod test {
                 .send_transaction_request(
                     proof_2,
                     "transfer_rule".to_string(),
+                    rule_digest,
                     vec![
                         "Charlie".to_string(),
                         "Dave".to_string(),
@@ -497,6 +506,7 @@ mod test {
             "contract_3/target/wasm32-unknown-unknown/release/contract_test.wasm";
         let rule_buffer =
             std::fs::read(filename).expect("could not load file into buffer");
+        let rule_digest = drop::crypto::hash(&rule_buffer).unwrap();
 
         let mut t = DataTree::new();
         let records = [
@@ -532,6 +542,7 @@ mod test {
                 .send_transaction_request(
                     proof_1,
                     "transfer_rule".to_string(),
+                    rule_digest,
                     vec![
                         "Alice".to_string(),
                         "Bob".to_string(),
@@ -559,6 +570,7 @@ mod test {
                 .send_transaction_request(
                     proof_1,
                     "transfer_rule".to_string(),
+                    rule_digest,
                     vec![
                         "Charlie".to_string(),
                         "Dave".to_string(),
@@ -603,6 +615,7 @@ mod test {
             "contract_3/target/wasm32-unknown-unknown/release/contract_test.wasm";
         let rule_buffer =
             std::fs::read(filename).expect("could not load file into buffer");
+        let rule_digest = drop::crypto::hash(&rule_buffer).unwrap();
 
         let mut t = DataTree::new();
         let records = [
@@ -642,6 +655,7 @@ mod test {
                 .send_transaction_request(
                     proof_1,
                     "transfer_rule".to_string(),
+                    rule_digest,
                     vec![
                         "Alice".to_string(),
                         "Bob".to_string(),
@@ -669,6 +683,7 @@ mod test {
                 .send_transaction_request(
                     proof_1,
                     "transfer_rule".to_string(),
+                    rule_digest,
                     vec![
                         "Charlie".to_string(),
                         "Dave".to_string(),
@@ -696,6 +711,7 @@ mod test {
                 .send_transaction_request(
                     proof_1,
                     "transfer_rule".to_string(),
+                    rule_digest,
                     vec![
                         "Aaron".to_string(),
                         "Vanessa".to_string(),
@@ -723,6 +739,7 @@ mod test {
                 .send_transaction_request(
                     proof_1,
                     "transfer_rule".to_string(),
+                    rule_digest,
                     vec![
                         "Justin".to_string(),
                         "Irina".to_string(),
@@ -809,6 +826,7 @@ mod test {
             "contract_3/target/wasm32-unknown-unknown/release/contract_test.wasm";
         let rule_buffer =
             std::fs::read(filename).expect("could not load file into buffer");
+        let rule_digest = drop::crypto::hash(&rule_buffer).unwrap();
 
         let mut t = DataTree::new();
         for i in 0..1000 {
@@ -844,6 +862,7 @@ mod test {
                     .send_transaction_request(
                         proof,
                         "transfer_rule".to_string(),
+                        rule_digest,
                         vec![1.to_string(), "transfer_rule".to_string()],
                         &args,
                     )
@@ -873,6 +892,7 @@ mod test {
                     .send_transaction_request(
                         proof,
                         "transfer_rule".to_string(),
+                        rule_digest,
                         vec![2.to_string(), "transfer_rule".to_string()],
                         &args,
                     )
@@ -895,6 +915,7 @@ mod test {
                     .send_transaction_request(
                         proof,
                         "transfer_rule".to_string(),
+                        rule_digest,
                         vec![1.to_string(), "transfer_rule".to_string()],
                         &args,
                     )
@@ -919,6 +940,7 @@ mod test {
             "contract_3/target/wasm32-unknown-unknown/release/contract_test.wasm";
         let rule_buffer =
             std::fs::read(filename).expect("could not load file into buffer");
+        let rule_digest = drop::crypto::hash(&rule_buffer).unwrap();
 
         let mut t = DataTree::new();
         for i in 0..1000 {
@@ -959,6 +981,7 @@ mod test {
                     .send_transaction_request(
                         p,
                         "transfer_rule".to_string(),
+                        rule_digest,
                         vec![n.to_string(), "transfer_rule".to_string()],
                         &args,
                     )

@@ -11,7 +11,7 @@ use drop::net::{
 };
 
 use super::{
-    DataTree, RecordID, RecordVal, RuleTransaction, TxRequest, TxResponse,
+    HTree, DataTree, RecordID, RuleTransaction, TxRequest, TxResponse, ModuleCache, ModuleCacheError
 };
 
 use super::history_tree::{HistoryTree, Prefix};
@@ -29,13 +29,17 @@ use tracing_futures::Instrument;
 
 // use rain_wasi_common::{Ledger, WasiSerializable};
 // use rain_wasmtime_contract::WasmContract;
-use wasm_common_bindings::{ContextLedger, Ledger};
+use wasm_common_bindings::{Ledger};
 // use wasmer_runtime::{imports, Func, memory::MemoryView};
 
 use wasmer::{Store, JIT, Module, Instance, NativeFunc, MemoryView, imports};
-use wasmer_compiler_llvm::LLVM;
-use wasmer_compiler_singlepass::Singlepass;
+#[cfg(not(feature = "native"))]
 use wasmer_compiler_cranelift::Cranelift;
+#[cfg(feature = "llvm")]
+use wasmer_compiler_llvm::LLVM;
+#[cfg(feature = "singlepass")]
+use wasmer_compiler_singlepass::Singlepass;
+#[cfg(feature = "native")]
 use wasmer_engine_native::Native;
 
 fn get_store() -> Store {
@@ -61,8 +65,6 @@ fn get_store() -> Store {
 use std::mem;
 
 const RECORD_LIMIT: usize = 400;
-
-type HTree = HistoryTree<RecordID, RecordVal>;
 
 pub struct MemoryReport {
     pub o_h_tree: usize, 
@@ -108,23 +110,22 @@ impl std::fmt::Display for MemoryReport {
     }
 }
 
-
-impl HTree {
-    pub fn memory_usage_report(&self) -> MemoryReport {
+impl MemoryReport {
+    fn new(htree: &HTree) -> Self {
         let o_h_tree = mem::size_of::<HTree>();
         let mut o_touches_queue = 0;
-        for k in &self.touches {
+        for k in &htree.touches {
             o_touches_queue += k.len() * mem::size_of::<Arc<RecordID>>();
         }
-        let o_touches_hashset = &self.counts.len() * mem::size_of::<Arc<RecordID>>();
+        let o_touches_hashset = &htree.counts.len() * mem::size_of::<Arc<RecordID>>();
         let mut o_touches_data = 0;
-        for k in &self.counts {
+        for k in &htree.counts {
             o_touches_data += (**k).len();
         }
-        let o_history_queue = &self.history.len() * mem::size_of::<Digest>();
-        let o_prefix_list = &self.prefix_list.len() * mem::size_of::<Prefix>();
+        let o_history_queue = &htree.history.len() * mem::size_of::<Digest>();
+        let o_prefix_list = &htree.prefix_list.len() * mem::size_of::<Prefix>();
 
-        let o_tree_serialized = bincode::serialize(&self.tree).unwrap().len();
+        let o_tree_serialized = bincode::serialize(&htree.tree).unwrap().len();
 
         MemoryReport{ 
             o_h_tree, 
@@ -139,14 +140,15 @@ impl HTree {
 }
 
 type ProtectedTree = Arc<RwLock<HTree>>;
+type ProtectedModuleCache = Arc<RwLock<ModuleCache>>;
 
 pub struct CoreNode {
     listener: TcpListener,
-    tob_addr: SocketAddr,
     tob_pub_key: PublicKey,
     exit: Receiver<()>,
 
     data: ProtectedTree,
+    module_cache: ProtectedModuleCache,
 }
 
 impl CoreNode {
@@ -179,11 +181,11 @@ impl CoreNode {
         let ret = (
             Self {
                 listener: listener,
-                tob_addr: tob_info.addr(),
                 tob_pub_key: *tob_info.public(),
                 exit: rx,
 
                 data: Arc::from(RwLock::new(h_tree)),
+                module_cache: Arc::from(RwLock::new(ModuleCache::new())),
             },
             tx,
         );
@@ -215,31 +217,36 @@ impl CoreNode {
 
             exit_fut = Some(exit);
 
-            let peer_addr = connection.peer_addr()?;
             let peer_pub = connection.remote_key();
-
             let data = self.data.clone();
+            if peer_pub != Some(self.tob_pub_key) {
+                info!("CLIENT connection {:?}", peer_pub);
 
-            if peer_pub == Some(self.tob_pub_key) {
-                info!(
-                    "TOB server connection: {}",
-                    peer_addr
+                task::spawn(
+                    async move {
+                        let client_handler = ClientRequestHandler::new(connection, data);
+    
+                        if let Err(_) = client_handler.serve().await {
+                            error!("failed request handling");
+                        }
+                    }.instrument(trace_span!("client_request_receiver")),
                 );
             } else {
-                info!("CLIENT connection {}", peer_addr);
+                info!("TOB server connection: {:?}", peer_pub);
+                
+                let module_cache = self.module_cache.clone();
+                task::spawn(
+                    async move {
+                        let request_handler = TobRequestHandler::new(connection, data, module_cache);
+    
+                        if let Err(_) = request_handler.serve().await {
+                            error!("failed request handling");
+                        }
+    
+                    }.instrument(trace_span!("tob_request_receiver")),
+                );
             }
-
-            let from_client = peer_pub != Some(self.tob_pub_key);
-            task::spawn(
-                async move {
-                    let request_handler = TxRequestHandler::new(connection, data, from_client);
-
-                    if let Err(_) = request_handler.serve().await {
-                        error!("failed request handling");
-                    }
-
-                }.instrument(trace_span!("tob_request_receiver", client = %self.tob_addr)),
-            );
+            
         }
     }
 
@@ -267,22 +274,19 @@ enum PollResult {
     Exit,
 }
 
-struct TxRequestHandler {
+struct ClientRequestHandler {
     connection: Connection,
     data: ProtectedTree,
-    from_client: bool,
 }
 
-impl TxRequestHandler {
+impl ClientRequestHandler {
     fn new(
         connection: Connection,
-        data: ProtectedTree,
-        from_client: bool,
+        data: ProtectedTree
     ) -> Self {
         Self {
             connection,
             data,
-            from_client,
         }
     }
 
@@ -311,13 +315,67 @@ impl TxRequestHandler {
         Ok(())
     }
 
-    fn execute_transaction(rule_id: &String, /*rule_hash: &Digest, */args: &Vec<u8>, tree: &DataTree) -> Result<Ledger, ()> {
+    async fn serve(mut self) -> Result<(), CoreNodeError> {
+        while let Ok(txr) = self.connection.receive::<TxRequest>().await {
+            match txr {
+                TxRequest::GetProof(records) => {
+                    info!("Received getproof request. Arguments {:?}", records);
+                    let guard = self.data.read().await;
+                    Self::handle_get_proof(
+                        guard,
+                        &mut self.connection,
+                        records.clone(),
+                    )
+                    .await?;
+
+                    info!(
+                        "Replying to getproof request. Arguments {:?}",
+                        records
+                    );
+                }
+                TxRequest::Execute(rt) => {
+                    error!("Client requesting 'execute' (TxExecute) with rule {:#?}. TxExecute can only come from TOB!", rt.rule_record_id);
+                }
+            }
+        }
+
+        self.connection.close().await?;
+
+        info!("End of client connection");
+
+        Ok(())
+    }
+}
+
+
+struct TobRequestHandler {
+    connection: Connection,
+    data: ProtectedTree,
+    module_cache: ProtectedModuleCache,
+}
+
+impl TobRequestHandler {
+    fn new(
+        connection: Connection,
+        data: ProtectedTree,
+        module_cache: ProtectedModuleCache,
+    ) -> Self {
+        Self {
+            connection,
+            data,
+            module_cache,
+        }
+    }
+
+    fn execute_transaction(rule_id: &String, rule_hash: &Digest, args: &Vec<u8>, tree: &DataTree, module_cache: &mut ModuleCache, local_tree: &HTree) -> Result<Ledger, ()> {
         match tree.get(rule_id) {
             Err(_) => {
                 error!("Error processing transaction: rule is missing from merkle proof");
                 return Err(());
             }
             Ok(bytes) => {
+                module_cache.get_instance(rule_id, rule_hash, local_tree);
+
                 let store = get_store();
                 let module = match Module::new(&store, &bytes) {
                     Err(e) => {
@@ -411,6 +469,7 @@ impl TxRequestHandler {
 
     async fn handle_execute(
         data: &mut ProtectedTree,
+        module_cache: &mut ProtectedModuleCache,
         rt: RuleTransaction,
     ) -> Result<(), CoreNodeError> {
         let used_record_count: usize = rt.merkle_proof.len();
@@ -419,21 +478,25 @@ impl TxRequestHandler {
             return Ok(());
         }
 
-        let mut guard = data.write().await;
+        let mut tree_guard = data.write().await;
+
 
         if rt.touched_records.len() > RECORD_LIMIT {
             error!("Error processing transaction: record limit exceeded. Limit is {}, rule touches {}", RECORD_LIMIT, rt.touched_records.len());
             return Ok(());
         }
 
-        if !guard
+        if !tree_guard
             .consistent_given_records(&rt.merkle_proof, &rt.touched_records)
         {
             error!("Error processing transaction: invalid merkle proof");
             return Ok(());
         }
 
-        let res = TxRequestHandler::execute_transaction(&rt.rule_record_id, &rt.rule_arguments, &rt.merkle_proof);
+        let mut cache_guard = module_cache.write().await;
+        let res = TobRequestHandler::execute_transaction(&rt.rule_record_id, &rt.rule_record_version, &rt.rule_arguments, &rt.merkle_proof, &mut cache_guard, &tree_guard);
+        drop(cache_guard);
+
         match res {
             Err(_) => return Ok(()),
             Ok(mut output_ledger) => {
@@ -444,19 +507,19 @@ impl TxRequestHandler {
                 .filter(|(k, _)| k != &rt.rule_record_id)
                 .collect();
 
-                guard.merge_consistent(&rt.merkle_proof, &rt.touched_records);
+                tree_guard.merge_consistent(&rt.merkle_proof, &rt.touched_records);
 
                 for (k, v) in output_ledger.drain() {
                     match input_ledger.remove(&k) {
                         // new (k,v)
                         None => {
                             //info!("Inserted {:?} into data tree.", (k.clone(), v.clone()));
-                            guard.insert(k, v);
+                            tree_guard.insert(k, v);
                         }
                         // modified (k,v)
                         Some(v2) if v != v2 => {
                             //info!("Inserted {:?} into data tree.", (k.clone(), v.clone()));
-                            guard.insert(k, v);
+                            tree_guard.insert(k, v);
                         }
                         _ => (),
                     }
@@ -464,13 +527,13 @@ impl TxRequestHandler {
 
                 for (k, _) in input_ledger.drain() {
                     //info!("Removed {:?} from data tree.", k);
-                    guard.remove(&k);
+                    tree_guard.remove(&k);
                 }
 
-                guard.push_history();
+                tree_guard.push_history();
 
                 // let (overhead, mut tree_size) =
-                let mut rep = guard.memory_usage_report();
+                let rep = MemoryReport::new(&tree_guard);
                 // This is excluding the memory occupied by the operation.
                 // This should be unnecessary once merkle tree memory usage is accurately determined.
                 // if rep.o_tree_serialized > bytes.len() {
@@ -480,7 +543,8 @@ impl TxRequestHandler {
                 {}", rep);
             }
         }
-        drop(guard);
+        
+        drop(tree_guard);
 
         Ok(())
     }
@@ -494,24 +558,7 @@ impl TxRequestHandler {
         while let Ok(txr) = self.connection.receive::<TxRequest>().await {
             match txr {
                 TxRequest::GetProof(records) => {
-                    info!("Received getproof request. Arguments {:?}", records);
-
-                    if self.from_client {
-                        let guard = self.data.read().await;
-                        Self::handle_get_proof(
-                            guard,
-                            &mut self.connection,
-                            records.clone(),
-                        )
-                        .await?;
-                    } else {
-                        error!("TxRequest::GetProof should be sent directly by a client, not via TOB!");
-                    }
-
-                    info!(
-                        "Replying to getproof request. Arguments {:?}",
-                        records
-                    );
+                    error!("TxRequest::GetProof should be sent directly by a client, not via TOB!");
                 }
                 TxRequest::Execute(rt) => {
                     info!(
@@ -519,23 +566,15 @@ impl TxRequestHandler {
                         rt.rule_record_id
                     );
 
-                    if self.from_client {
-                        error!("Client attempting to execute directly. TxExecute can only come from TOB!");
-                    } else {
-                        TxRequestHandler::handle_execute(&mut self.data, rt)
-                            .await?;
-                    }
+                    TobRequestHandler::handle_execute(&mut self.data, &mut self.module_cache, rt)
+                        .await?;
                 }
             }
         }
 
         self.connection.close().await?;
 
-        if self.from_client {
-            info!("end of client connection");
-        } else {
-            info!("end of TOB connection");
-        }
+        info!("end of TOB connection");
 
         Ok(())
     }
@@ -545,6 +584,10 @@ impl TxRequestHandler {
 mod test {
     use super::super::test::*;
     use super::super::{DataTree, TxRequest, TxResponse};
+    extern crate test;
+    use test::Bencher;
+    use wasm_common_bindings::{ContextLedger, Ledger};
+    use super::*;
 
     use tracing::trace_span;
     use tracing_futures::Instrument;
@@ -648,11 +691,6 @@ mod test {
 
         config.tear_down().await;
     }
-
-    extern crate test;
-    use test::Bencher;
-
-    use super::*;
 
     fn get_proof_for_records(data: &HTree, records: Vec<RecordID>) -> DataTree {
         let mut t = data.get_validator();

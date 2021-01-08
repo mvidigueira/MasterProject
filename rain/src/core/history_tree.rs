@@ -12,7 +12,7 @@ use std::collections::HashSet;
 use std::hash::Hash;
 use std::sync::Arc;
 
-use tracing::{error, info};
+use tracing::{error};
 
 use std::fmt::Debug;
 use std::num::Wrapping;
@@ -497,6 +497,22 @@ where
         }
     }
 
+    // Check if this history tree is responsible for permanently storing this key.
+    // Concretely, returns true if the prefix list covers this key's prefix,
+    // false otherwise.
+    pub fn covers(&self, key: &K) -> bool {
+        let d = drop::crypto::hash(key).unwrap();
+        let target = &Prefix::new(d.as_ref().to_vec(), 0);
+        
+        for p in self.prefix_list.iter() {
+            if p.includes(target) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     fn pop_touches(&mut self) {
         let prefix_list = &self.prefix_list;
 
@@ -953,11 +969,4 @@ mod tests {
             res.expect("Should have been Ok!");
         }
     }
-
-    // #[test]
-    // fn test_prefixes() {
-    //     let target = Prefix::from("1");
-    //     let p = Prefix::from("01111010");
-    //     println!("P: {:?}, Target: {:?}, Is_close: {}", p, target, target.includes(&p) || p.includes(&target));
-    // }
 }

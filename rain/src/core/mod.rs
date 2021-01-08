@@ -1,5 +1,6 @@
 mod client;
 mod corenode;
+mod module_cache;
 pub mod history_tree;
 pub mod simulated_contract;
 mod tob_server;
@@ -11,6 +12,8 @@ pub use client::ClientNode;
 pub use corenode::CoreNode;
 pub use tob_server::TobServer;
 pub use history_tree::Prefix;
+pub use module_cache::{ModuleCache, ModuleCacheError};
+use history_tree::HistoryTree;
 
 use std::io::Error as IoError;
 
@@ -18,6 +21,7 @@ use drop::error::Error;
 use drop::net::{
     ConnectError, ListenerError, ReceiveError, SendError,
 };
+use drop::crypto::Digest;
 
 use merkle::{error::MerkleError, Tree};
 
@@ -60,6 +64,7 @@ error! {
 type RecordID = String;
 type RecordVal = Vec<u8>;
 type DataTree = Tree<RecordID, RecordVal>;
+type HTree = HistoryTree<RecordID, RecordVal>;
 
 #[derive(
     classic::Serialize, classic::Deserialize, Debug, Clone, Hash, PartialEq, Eq,
@@ -97,6 +102,7 @@ impl classic::Message for TxResponse {}
 pub struct RuleTransaction {
     merkle_proof: DataTree,
     rule_record_id: RecordID,
+    rule_record_version: Digest,
     touched_records: Vec<RecordID>,
     rule_arguments: Vec<u8>,
 }
@@ -105,12 +111,14 @@ impl RuleTransaction {
     pub fn new<T: classic::Serialize>(
         proof: DataTree,
         rule: RecordID,
+        rule_digest: Digest,
         touched_records: Vec<RecordID>,
         args: &T,
     ) -> Self {
         Self {
             merkle_proof: proof,
             rule_record_id: rule,
+            rule_record_version: rule_digest,
             touched_records: touched_records,
             rule_arguments: bincode::serialize(args).unwrap(),
         }

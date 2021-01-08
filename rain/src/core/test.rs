@@ -19,7 +19,6 @@ use tracing_subscriber::{EnvFilter, FmtSubscriber};
 use futures::future;
 
 use rand::prelude::SliceRandom;
-use rand::Rng;
 
 static PORT_OFFSET: AtomicU16 = AtomicU16::new(0);
 
@@ -45,6 +44,7 @@ pub fn get_example_rt() -> RuleTransaction {
     RuleTransaction::new(
         DataTree::new(),
         "Alice".to_string(),
+        drop::crypto::hash(&"transaction record bytes".to_string()).unwrap(),
         vec!["Alice".to_string()],
         &(123),
     )
