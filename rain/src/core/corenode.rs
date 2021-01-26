@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::collections::HashSet;
 
 use drop::crypto::{
     key::exchange::{Exchanger, PublicKey},
@@ -11,11 +12,12 @@ use drop::net::{
 };
 
 use super::{
-    HTree, DataTree, RecordID, RuleTransaction, TxRequest, TxResponse, ModuleCache, ModuleCacheError
+    CoreNodeError, HTree, DataTree, RecordID, RuleTransaction, 
+    UserCoreRequest, UserCoreResponse, TobRequest, TobResponse,
+    ExecuteResult, ModuleCache, Prefix, Touch, memory_usage::MemoryReport
 };
-
-use super::history_tree::{HistoryTree, Prefix};
-use super::CoreNodeError;
+use wasm_common_bindings::{Ledger};
+use wasmer::{NativeFunc, MemoryView};
 
 use futures::future::{self, Either};
 
@@ -26,118 +28,7 @@ use tokio::task;
 use tracing::{error, info, trace_span};
 use tracing_futures::Instrument;
 
-
-// use rain_wasi_common::{Ledger, WasiSerializable};
-// use rain_wasmtime_contract::WasmContract;
-use wasm_common_bindings::{Ledger};
-// use wasmer_runtime::{imports, Func, memory::MemoryView};
-
-use wasmer::{Store, JIT, Module, Instance, NativeFunc, MemoryView, imports};
-#[cfg(not(feature = "native"))]
-use wasmer_compiler_cranelift::Cranelift;
-#[cfg(feature = "llvm")]
-use wasmer_compiler_llvm::LLVM;
-#[cfg(feature = "singlepass")]
-use wasmer_compiler_singlepass::Singlepass;
-#[cfg(feature = "native")]
-use wasmer_engine_native::Native;
-
-fn get_store() -> Store {
-    // The default backend
-    let compiler = Cranelift::default();
-    
-    #[cfg(feature = "singlepass")]
-    let compiler = Singlepass::new();
-    
-    #[cfg(feature = "llvm")]
-    let compiler = LLVM::new();
-
-    // The default compiler
-    #[cfg(not(feature = "native"))]
-    let store = Store::new(&JIT::new(compiler).engine());
-
-    #[cfg(feature = "native")]
-    let store = Store::new(&Native::new(compiler).engine());
-
-    store
-}
-
-use std::mem;
-
 const RECORD_LIMIT: usize = 400;
-
-pub struct MemoryReport {
-    pub o_h_tree: usize, 
-    pub o_touches_queue: usize,
-    pub o_touches_hashset: usize, 
-    pub o_touches_data: usize,
-    pub o_history_queue: usize,
-    pub o_prefix_list: usize,
-    pub o_tree_serialized: usize,
-}
-
-impl std::fmt::Display for MemoryReport {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let o_sum_data_independent = self.o_h_tree + self.o_touches_queue + 
-        self.o_touches_hashset + self.o_touches_data + 
-        self.o_history_queue + self.o_prefix_list;
-
-        let o_sum_data_dependent = self.o_tree_serialized;
-
-        write!(f, "Memory usage decomposition:
-        Data independent overhead total: ------ {} B
-          - History tree (structs) ------------ {} B
-          - Touched records queue: ------------ {} B
-          - Touched records hashset: ---------- {} B
-          - Touched records data: ------------- {} B
-          - Tree root history queue: ---------- {} B
-          - Prefix list ----------------------- {} B
-          
-        Data overhead total: ------------------ {} B
-          - Merkle tree (serialized) ---------- {} B
-        
-        Total memory: ------------------------- {} B",
-        o_sum_data_independent,
-        self.o_h_tree, 
-        self.o_touches_queue,
-        self.o_touches_hashset, 
-        self.o_touches_data,
-        self.o_history_queue,
-        self.o_prefix_list,
-        o_sum_data_dependent,
-        self.o_tree_serialized, 
-        o_sum_data_independent + self.o_tree_serialized)
-    }
-}
-
-impl MemoryReport {
-    fn new(htree: &HTree) -> Self {
-        let o_h_tree = mem::size_of::<HTree>();
-        let mut o_touches_queue = 0;
-        for k in &htree.touches {
-            o_touches_queue += k.len() * mem::size_of::<Arc<RecordID>>();
-        }
-        let o_touches_hashset = &htree.counts.len() * mem::size_of::<Arc<RecordID>>();
-        let mut o_touches_data = 0;
-        for k in &htree.counts {
-            o_touches_data += (**k).len();
-        }
-        let o_history_queue = &htree.history.len() * mem::size_of::<Digest>();
-        let o_prefix_list = &htree.prefix_list.len() * mem::size_of::<Prefix>();
-
-        let o_tree_serialized = bincode::serialize(&htree.tree).unwrap().len();
-
-        MemoryReport{ 
-            o_h_tree, 
-            o_touches_queue,
-            o_touches_hashset, 
-            o_touches_data,
-            o_history_queue,
-            o_prefix_list, 
-            o_tree_serialized,
-        }
-    }
-}
 
 type ProtectedTree = Arc<RwLock<HTree>>;
 type ProtectedModuleCache = Arc<RwLock<ModuleCache>>;
@@ -167,7 +58,7 @@ impl CoreNode {
             .await
             .expect("listen failed");
 
-        let mut h_tree = HistoryTree::new(
+        let mut h_tree = HTree::new(
             history_len,
             prefix_list,
         );
@@ -222,9 +113,11 @@ impl CoreNode {
             if peer_pub != Some(self.tob_pub_key) {
                 info!("CLIENT connection {:?}", peer_pub);
 
+                let module_cache = self.module_cache.clone();
+
                 task::spawn(
                     async move {
-                        let client_handler = ClientRequestHandler::new(connection, data);
+                        let client_handler = ClientRequestHandler::new(connection, data, module_cache);
     
                         if let Err(_) = client_handler.serve().await {
                             error!("failed request handling");
@@ -234,10 +127,9 @@ impl CoreNode {
             } else {
                 info!("TOB server connection: {:?}", peer_pub);
                 
-                let module_cache = self.module_cache.clone();
                 task::spawn(
                     async move {
-                        let request_handler = TobRequestHandler::new(connection, data, module_cache);
+                        let request_handler = TobRequestHandler::new(connection, data);
     
                         if let Err(_) = request_handler.serve().await {
                             error!("failed request handling");
@@ -277,16 +169,19 @@ enum PollResult {
 struct ClientRequestHandler {
     connection: Connection,
     data: ProtectedTree,
+    module_cache: ProtectedModuleCache,
 }
 
 impl ClientRequestHandler {
     fn new(
         connection: Connection,
-        data: ProtectedTree
+        data: ProtectedTree,
+        module_cache: ProtectedModuleCache,
     ) -> Self {
         Self {
             connection,
             data,
+            module_cache,
         }
     }
 
@@ -306,19 +201,222 @@ impl ClientRequestHandler {
             }
         }
 
-        connection
-            .send(&TxResponse::GetProof((guard.history_count, t)))
-            .await?;
+        let history_count = guard.history_count;
 
         drop(guard);
+
+        connection
+            .send(&UserCoreResponse::GetProof((history_count, t)))
+            .await?;
 
         Ok(())
     }
 
+    fn execute_transaction(rule_id: &String, rule_hash: &Digest, args: &Vec<u8>, tree: &DataTree, module_cache: &mut ModuleCache, local_tree: &HTree) -> Result<Ledger, ()> {
+        let instance = match module_cache.get_instance(rule_id, rule_hash, local_tree) {
+            Err(e) => {
+                error!("Error getting module instance: {:?}", e);
+                return Err(());
+            },
+            Ok(i) => i,
+        };
+
+        let input_ledger: Ledger = tree
+            .clone_to_vec()
+            .into_iter()
+            .collect();
+
+        let allocate: NativeFunc<i32, i32> = match instance.exports
+        .get_native_function("allocate_vec") {
+            Err(e) => {
+                error!("Error finding mandatory 'allocate_vec' function in wasm module: {:?}", e);
+                return Err(());
+            }
+            Ok(alloc) => alloc,
+        };
+
+        let execute: NativeFunc<(i32, i32), i32> = match instance.exports
+        .get_native_function("execute") {
+            Err(e) => {
+                error!("Error finding mandatory 'execute' function in wasm module: {:?}", e);
+                return Err(());
+            }
+            Ok(exec) => exec,
+        };
+
+        let input = bincode::serialize(&(input_ledger, args.clone())).unwrap();
+        let len = input.len();
+
+        let ptr = match allocate.call(len as i32) {
+            Ok(ptr) => ptr,
+            Err(e) => {
+                error!("Call to 'allocate' in wasm module failed: {:?}", e);
+                return Err(());
+            }
+        };
+
+        let mem = match instance.exports.get_memory("memory") {
+            Ok(m) => m,
+            Err(e) => {
+                error!("Error finding default memory 'memory' wasm module: {:?}", e);
+                return Err(());
+            }
+        };
+
+        let s: MemoryView<u8>  = mem.view();
+
+        for (i, v) in input.iter().enumerate() {
+            s[ptr as usize + i].replace(*v);
+        }
+
+        let ptr = match execute.call(ptr, len as i32) {
+            Ok(ptr) => ptr,
+            Err(e) => {
+                error!("Call to 'execute' in wasm module failed: {:?}", e);
+                return Err(());
+            }
+        };
+        let s: MemoryView<u8>  = mem.view();
+
+        let s = s[..].iter().map(|x| x.get()).collect::<Vec<u8>>();
+        let output_ledger = match wasm_common_bindings::get_result(&s, ptr) {
+            Err(_) => {
+                error!("Error deserializing output from transaction.");
+                return Err(());
+            }
+            Ok(l) => l,
+        };
+
+        Ok(output_ledger)
+    }
+
+    async fn handle_execute(
+        data: &mut ProtectedTree,
+        module_cache: &mut ProtectedModuleCache,
+        rt: RuleTransaction,
+    ) -> Result<ExecuteResult, CoreNodeError> {
+        let used_record_count: usize = rt.merkle_proof.len();
+        if used_record_count > RECORD_LIMIT {
+            let cause = format!("Error processing transaction: record limit exceeded. Limit is {}, rule touches {}", RECORD_LIMIT, used_record_count);
+            error!(cause);
+            return Ok(ExecuteResult::fail(rt.rule_record_id, rt.rule_version, cause));
+        }
+
+        let mut tree_guard = data.write().await;
+
+        if !tree_guard
+            .consistent_given_records(&rt.merkle_proof, &rt.touched_records)
+        {
+            let cause = format!("Error processing transaction: invalid merkle proof");
+            error!(cause);
+            return Ok(ExecuteResult::fail(rt.rule_record_id, rt.rule_version, cause));
+        }
+
+
+        drop(tree_guard);
+
+        let mut cache_guard = module_cache.write().await;
+        let res = ClientRequestHandler::execute_transaction(&rt.rule_record_id, &rt.rule_version, &rt.rule_arguments, &rt.merkle_proof, &mut cache_guard, &tree_guard);
+        drop(cache_guard);
+
+        match res {
+            Err(_) => return Ok(ExecuteResult::fail(rt.rule_record_id, rt.rule_version, format!("failed executing transaction : error message WIP"))),
+            Ok(mut output_ledger) => {
+
+                let mut output: Vec<(RecordID, Touch)> = vec!();
+                let mut records: HashSet<RecordID> = rt.touched_records.drain(..).collect();
+
+                let mut input_ledger: Ledger = rt
+                .merkle_proof
+                .clone_to_vec()
+                .into_iter()
+                .filter(|(k, _)| k != &rt.rule_record_id)
+                .collect();
+
+                for k in rt.touched_records.drain(..) {
+                    match (input_ledger.remove(&k), output_ledger.remove(&k)) {
+                        (None, Some(v)) => {
+                            output.push((k, Touch::Added(v)));
+                        },
+                        (None, None) => {
+                            output.push((k, Touch::Read));
+                        }
+                        (Some(_), None) => {
+                            output.push((k, Touch::Deleted));
+                        }
+                        (Some(v1), Some(v2)) => {
+                            let v = if v1 == v2 {
+                                Touch::Read
+                            } else {
+                                Touch::Modified(v2)
+                            };
+
+                            output.push((k, v));
+                        }
+
+                    }
+                }
+
+                Ok(ExecuteResult::new(rt.rule_record_id, rt.rule_version, output))
+            }
+        }
+    }
+
+    // match res {
+    //     Err(_) => return Ok(ExecuteResult::fail(rt.rule_record_id, rt.rule_version, "failed executing transaction : error message WIP")),
+    //     Ok(mut output_ledger) => {
+    //         let mut input_ledger: Ledger = rt
+    //         .merkle_proof
+    //         .clone_to_vec()
+    //         .into_iter()
+    //         .filter(|(k, _)| k != &rt.rule_record_id)
+    //         .collect();
+
+    //         tree_guard.merge_consistent(&rt.merkle_proof, &rt.touched_records);
+
+    //         for (k, v) in output_ledger.drain() {
+    //             match input_ledger.remove(&k) {
+    //                 // new (k,v)
+    //                 None => {
+    //                     //info!("Inserted {:?} into data tree.", (k.clone(), v.clone()));
+    //                     tree_guard.insert(k, v);
+    //                 }
+    //                 // modified (k,v)
+    //                 Some(v2) if v != v2 => {
+    //                     //info!("Inserted {:?} into data tree.", (k.clone(), v.clone()));
+    //                     tree_guard.insert(k, v);
+    //                 }
+    //                 _ => (),
+    //             }
+    //         }
+
+    //         for (k, _) in input_ledger.drain() {
+    //             //info!("Removed {:?} from data tree.", k);
+    //             tree_guard.remove(&k);
+    //         }
+
+    //         tree_guard.push_history();
+
+    //         // let (overhead, mut tree_size) =
+    //         let rep = MemoryReport::new(&tree_guard);
+    //         // This is excluding the memory occupied by the operation.
+    //         // This should be unnecessary once merkle tree memory usage is accurately determined.
+    //         // if rep.o_tree_serialized > bytes.len() {
+    //         //     rep.o_tree_serialized -= bytes.len();
+    //         // }
+    //         info!("Transaction applied: local data successfully updated.
+    //         {}", rep);
+    //     }
+    // }
+    
+    // drop(tree_guard);
+
+    // Ok(())
+
     async fn serve(mut self) -> Result<(), CoreNodeError> {
-        while let Ok(txr) = self.connection.receive::<TxRequest>().await {
+        while let Ok(txr) = self.connection.receive::<UserCoreRequest>().await {
             match txr {
-                TxRequest::GetProof(records) => {
+                UserCoreRequest::GetProof(records) => {
                     info!("Received getproof request. Arguments {:?}", records);
                     let guard = self.data.read().await;
                     Self::handle_get_proof(
@@ -333,8 +431,14 @@ impl ClientRequestHandler {
                         records
                     );
                 }
-                TxRequest::Execute(rt) => {
-                    error!("Client requesting 'execute' (TxExecute) with rule {:#?}. TxExecute can only come from TOB!", rt.rule_record_id);
+                UserCoreRequest::Execute(rt) => {
+                    info!(
+                        "Received execute request. Rule: {:#?}",
+                        rt.rule_record_id
+                    );
+
+                    Self::handle_execute(&mut self.data, &mut self.module_cache, rt)
+                        .await?;
                 }
             }
         }
@@ -351,223 +455,135 @@ impl ClientRequestHandler {
 struct TobRequestHandler {
     connection: Connection,
     data: ProtectedTree,
-    module_cache: ProtectedModuleCache,
 }
 
 impl TobRequestHandler {
     fn new(
         connection: Connection,
         data: ProtectedTree,
-        module_cache: ProtectedModuleCache,
     ) -> Self {
         Self {
             connection,
             data,
-            module_cache,
         }
     }
 
-    fn execute_transaction(rule_id: &String, rule_hash: &Digest, args: &Vec<u8>, tree: &DataTree, module_cache: &mut ModuleCache, local_tree: &HTree) -> Result<Ledger, ()> {
-        match tree.get(rule_id) {
-            Err(_) => {
-                error!("Error processing transaction: rule is missing from merkle proof");
-                return Err(());
-            }
-            Ok(bytes) => {
-                module_cache.get_instance(rule_id, rule_hash, local_tree);
+    // async fn handle_apply_transaction(
+    //     data: &mut ProtectedTree,
+    //     rt: RuleTransaction,
+    // ) -> Result<ExecuteResult, CoreNodeError> {
+    //     let mut tree_guard = data.write().await;
+    //     let history_count = tree_guard.history_count;
 
-                let store = get_store();
-                let module = match Module::new(&store, &bytes) {
-                    Err(e) => {
-                        error!("Error processing transaction: error loading module: {:?}", e);
-                        return Err(());
-                    }
-                    Ok(m) => m,
-                };
+    //     let used_record_count: usize = rt.merkle_proof.len();
+    //     if used_record_count > RECORD_LIMIT {
+    //         let cause = format!("Error processing transaction: record limit exceeded. Limit is {}, rule touches {}", RECORD_LIMIT, used_record_count);
+    //         error!(cause);
+    //         return Ok(ExecuteResult::fail(rt.rule_record_id, rt.rule_version, history_count, cause));
+    //     }
 
-                // removes (k,v) association of rule, for performance
-                let input_ledger: Ledger = tree
-                    .clone_to_vec()
-                    .into_iter()
-                    .filter(|(k, _)| k != rule_id)
-                    .collect();
-
-                let import_object = imports! {};
-                let instance = match Instance::new(&module, &import_object) {
-                    Err(e) => {
-                        error!("Error processing transaction: error instantiating module: {:?}", e);
-                        return Err(());
-                    }
-                    Ok(i) => i,
-                };
-
-                let allocate: NativeFunc<i32, i32> = match instance.exports
-                .get_native_function("allocate_vec") {
-                    Err(e) => {
-                        error!("Error finding mandatory 'allocate_vec' function in wasm module: {:?}", e);
-                        return Err(());
-                    }
-                    Ok(alloc) => alloc,
-                };
-
-                let execute: NativeFunc<(i32, i32), i32> = match instance.exports
-                .get_native_function("execute") {
-                    Err(e) => {
-                        error!("Error finding mandatory 'execute' function in wasm module: {:?}", e);
-                        return Err(());
-                    }
-                    Ok(exec) => exec,
-                };
-
-                let input = bincode::serialize(&(input_ledger, args.clone())).unwrap();
-                let len = input.len();
-
-                let ptr = match allocate.call(len as i32) {
-                    Ok(ptr) => ptr,
-                    Err(e) => {
-                        error!("Call to 'allocate' in wasm module failed: {:?}", e);
-                        return Err(());
-                    }
-                };
-
-                let mem = match instance.exports.get_memory("memory") {
-                    Ok(m) => m,
-                    Err(e) => {
-                        error!("Error finding default memory 'memory' wasm module: {:?}", e);
-                        return Err(());
-                    }
-                };
-
-                let s: MemoryView<u8>  = mem.view();
-
-                for (i, v) in input.iter().enumerate() {
-                    s[ptr as usize + i].replace(*v);
-                }
-
-                let ptr = match execute.call(ptr, len as i32) {
-                    Ok(ptr) => ptr,
-                    Err(e) => {
-                        error!("Call to 'execute' in wasm module failed: {:?}", e);
-                        return Err(());
-                    }
-                };
-                let s: MemoryView<u8>  = mem.view();
-
-                let s = s[..].iter().map(|x| x.get()).collect::<Vec<u8>>();
-                let output_ledger = match wasm_common_bindings::get_result(&s, ptr) {
-                    Err(_) => {
-                        error!("Error deserializing output from transaction.");
-                        return Err(());
-                    }
-                    Ok(l) => l,
-                };
-
-                Ok(output_ledger)
-            }
-        }
-    }
-
-    async fn handle_execute(
-        data: &mut ProtectedTree,
-        module_cache: &mut ProtectedModuleCache,
-        rt: RuleTransaction,
-    ) -> Result<(), CoreNodeError> {
-        let used_record_count: usize = rt.merkle_proof.len();
-        if used_record_count > RECORD_LIMIT {
-            error!("Error processing transaction: record limit exceeded. Limit is {}, rule touches {}", RECORD_LIMIT, used_record_count);
-            return Ok(());
-        }
-
-        let mut tree_guard = data.write().await;
+    //     if !tree_guard
+    //         .consistent_given_records(&rt.merkle_proof, &rt.touched_records)
+    //     {
+    //         let cause = format!("Error processing transaction: invalid merkle proof");
+    //         error!(cause);
+    //         return Ok(ExecuteResult::fail(rt.rule_record_id, rt.rule_version, history_count, cause));
+    //     }
 
 
-        if rt.touched_records.len() > RECORD_LIMIT {
-            error!("Error processing transaction: record limit exceeded. Limit is {}, rule touches {}", RECORD_LIMIT, rt.touched_records.len());
-            return Ok(());
-        }
+    //     drop(tree_guard);
 
-        if !tree_guard
-            .consistent_given_records(&rt.merkle_proof, &rt.touched_records)
-        {
-            error!("Error processing transaction: invalid merkle proof");
-            return Ok(());
-        }
+    //     let mut cache_guard = module_cache.write().await;
+    //     let res = ClientRequestHandler::execute_transaction(&rt.rule_record_id, &rt.rule_version, &rt.rule_arguments, &rt.merkle_proof, &mut cache_guard, &tree_guard);
+    //     drop(cache_guard);
 
-        let mut cache_guard = module_cache.write().await;
-        let res = TobRequestHandler::execute_transaction(&rt.rule_record_id, &rt.rule_record_version, &rt.rule_arguments, &rt.merkle_proof, &mut cache_guard, &tree_guard);
-        drop(cache_guard);
+    //     match res {
+    //         Err(_) => return Ok(ExecuteResult::fail(rt.rule_record_id, rt.rule_version, history_count, format!("failed executing transaction : error message WIP"))),
+    //         Ok(mut output_ledger) => {
 
-        match res {
-            Err(_) => return Ok(()),
-            Ok(mut output_ledger) => {
-                let mut input_ledger: Ledger = rt
-                .merkle_proof
-                .clone_to_vec()
-                .into_iter()
-                .filter(|(k, _)| k != &rt.rule_record_id)
-                .collect();
+    //             let mut output: Vec<(RecordID, Touch)> = vec!();
+    //             let mut records: HashSet<RecordID> = rt.touched_records.drain(..).collect();
 
-                tree_guard.merge_consistent(&rt.merkle_proof, &rt.touched_records);
+    //             let mut input_ledger: Ledger = rt
+    //             .merkle_proof
+    //             .clone_to_vec()
+    //             .into_iter()
+    //             .filter(|(k, _)| k != &rt.rule_record_id)
+    //             .collect();
 
-                for (k, v) in output_ledger.drain() {
-                    match input_ledger.remove(&k) {
-                        // new (k,v)
-                        None => {
-                            //info!("Inserted {:?} into data tree.", (k.clone(), v.clone()));
-                            tree_guard.insert(k, v);
-                        }
-                        // modified (k,v)
-                        Some(v2) if v != v2 => {
-                            //info!("Inserted {:?} into data tree.", (k.clone(), v.clone()));
-                            tree_guard.insert(k, v);
-                        }
-                        _ => (),
-                    }
-                }
+    //             for k in rt.touched_records.drain(..) {
+    //                 match (input_ledger.remove(&k), output_ledger.remove(&k)) {
+    //                     (None, Some(v)) => {
+    //                         output.push((k, Touch::Added(v)));
+    //                     },
+    //                     (None, None) => {
+    //                         output.push((k, Touch::Read));
+    //                     }
+    //                     (Some(_), None) => {
+    //                         output.push((k, Touch::Deleted));
+    //                     }
+    //                     (Some(v1), Some(v2)) => {
+    //                         let v = if v1 == v2 {
+    //                             Touch::Read
+    //                         } else {
+    //                             Touch::Modified(v2)
+    //                         };
 
-                for (k, _) in input_ledger.drain() {
-                    //info!("Removed {:?} from data tree.", k);
-                    tree_guard.remove(&k);
-                }
+    //                         output.push((k, v));
+    //                     }
 
-                tree_guard.push_history();
+    //                 }
+    //             }
 
-                // let (overhead, mut tree_size) =
-                let rep = MemoryReport::new(&tree_guard);
-                // This is excluding the memory occupied by the operation.
-                // This should be unnecessary once merkle tree memory usage is accurately determined.
-                // if rep.o_tree_serialized > bytes.len() {
-                //     rep.o_tree_serialized -= bytes.len();
-                // }
-                info!("Transaction applied: local data successfully updated.
-                {}", rep);
-            }
-        }
-        
-        drop(tree_guard);
-
-        Ok(())
-    }
-
-    // fn simulate_transaction(&self, ledger: String, args: String) -> String {
-    //     // simulated_contract::execute(ledger, args)
-    //     // simulated_contract::set_record_value(ledger, args)
+    //             Ok(ExecuteResult::new(rt.rule_record_id, rt.rule_version, history_count, output))
+    //         }
+    //     }
     // }
 
     async fn serve(mut self) -> Result<(), CoreNodeError> {
-        while let Ok(txr) = self.connection.receive::<TxRequest>().await {
+        while let Ok(txr) = self.connection.receive::<TobRequest>().await {
             match txr {
-                TxRequest::GetProof(records) => {
-                    error!("TxRequest::GetProof should be sent directly by a client, not via TOB!");
-                }
-                TxRequest::Execute(rt) => {
-                    info!(
-                        "Received execute request. Rule: {:#?}",
-                        rt.rule_record_id
-                    );
+                TobRequest::Apply(req) => {
+                    let touched_records = req.output.iter().map(|x| x.0).collect();
+                    // TODO: receive and validate signatures
 
-                    TobRequestHandler::handle_execute(&mut self.data, &mut self.module_cache, rt)
-                        .await?;
+                    let mut tree_guard = self.data.write().await;
+
+                    if !tree_guard.consistent_given_records(&req.input_merkle_proof, &touched_records)
+                    {
+                        let cause = format!("Error processing transaction: invalid merkle proof");
+                        error!(cause);
+                        continue;
+                    }
+
+                    tree_guard.merge_consistent(&req.input_merkle_proof, &touched_records);
+
+                    for (k, t) in req.output.drain(..) {
+                        match t {
+                            Touch::Modified(v) | Touch::Added(v) => {
+                                tree_guard.insert(k, v);
+                            }
+                            Touch::Deleted => {
+                                tree_guard.remove(&k);
+                            }
+                            Touch::Read => (),
+                        }
+                    }
+        
+                    tree_guard.push_history();
+        
+                    // let (overhead, mut tree_size) =
+                    let rep = MemoryReport::new(&tree_guard);
+                    // This is excluding the memory occupied by the operation.
+                    // This should be unnecessary once merkle tree memory usage is accurately determined.
+                    // if rep.o_tree_serialized > bytes.len() {
+                    //     rep.o_tree_serialized -= bytes.len();
+                    // }
+                    info!("Transaction applied: local data successfully updated.
+                    {}", rep);
+
+
+                    unimplemented!();
                 }
             }
         }
@@ -583,7 +599,7 @@ impl TobRequestHandler {
 #[cfg(test)]
 mod test {
     use super::super::test::*;
-    use super::super::{DataTree, TxRequest, TxResponse};
+    use super::super::{DataTree, UserCoreRequest, UserCoreResponse, TobRequest, TobResponse};
     extern crate test;
     use test::Bencher;
     use wasm_common_bindings::{ContextLedger, Ledger};
@@ -624,17 +640,17 @@ mod test {
         let local = connection.local_addr().expect("getaddr failed");
 
         async move {
-            let txr = TxRequest::GetProof(vec![String::from("Alan")]);
+            let txr = UserCoreRequest::GetProof(vec![String::from("Alan")]);
             connection.send(&txr).await.expect("send failed");
 
             let resp = connection
-                .receive::<TxResponse>()
+                .receive::<UserCoreResponse>()
                 .await
                 .expect("recv failed");
 
             assert_eq!(
                 resp,
-                TxResponse::GetProof((1, DataTree::new())),
+                UserCoreResponse::GetProof((1, DataTree::new())),
                 "invalid response from corenode"
             );
         }
@@ -657,27 +673,27 @@ mod test {
         let local = c_node.local_addr().expect("getaddr failed");
 
         async move {
-            let txr = TxRequest::GetProof(vec![String::from("Alan")]);
+            let txr = UserCoreRequest::GetProof(vec![String::from("Alan")]);
             c_node.send(&txr).await.expect("send failed");
 
             let resp =
-                c_node.receive::<TxResponse>().await.expect("recv failed");
+                c_node.receive::<UserCoreResponse>().await.expect("recv failed");
 
             assert_eq!(
                 resp,
-                TxResponse::GetProof((1, DataTree::new())),
+                UserCoreResponse::GetProof((1, DataTree::new())),
                 "invalid response from corenode"
             );
 
-            let txr = TxRequest::Execute(get_example_rt());
+            let txr = TobRequest::Apply(get_example_tobpayload());
             c_tob.send(&txr).await.expect("send failed");
 
             let resp =
-                c_tob.receive::<TxResponse>().await.expect("recv failed");
+                c_tob.receive::<TobResponse>().await.expect("recv failed");
 
             assert_eq!(
                 resp,
-                TxResponse::Execute(String::from(
+                TobResponse::Result(String::from(
                     "Request successfully forwarded to all peers"
                 )),
                 "invalid response from tob server"
@@ -803,7 +819,6 @@ mod test {
     //     let records = vec![
     //         "Alice".to_string(),
     //         "Bob".to_string(),
-    //         "transfer_rule".to_string(),
     //     ];
 
     //     let proof = get_proof_for_records(&h_tree, records.clone());

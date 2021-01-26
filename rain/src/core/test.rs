@@ -1,7 +1,7 @@
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicU16, Ordering};
 
-use super::{CoreNode, DataTree, RuleTransaction, TobServer, Prefix};
+use super::{CoreNode, DataTree, RuleTransaction, TobServer, Prefix, PayloadForTob};
 
 use drop::crypto::key::exchange::Exchanger;
 use drop::net::{
@@ -47,6 +47,14 @@ pub fn get_example_rt() -> RuleTransaction {
         drop::crypto::hash(&"transaction record bytes".to_string()).unwrap(),
         vec!["Alice".to_string()],
         &(123),
+    )
+}
+
+pub fn get_example_tobpayload() -> PayloadForTob {
+    PayloadForTob::new(
+        "some rule".to_string(),
+        DataTree::new(),
+        vec!(),
     )
 }
 
@@ -235,12 +243,10 @@ pub fn get_balanced_prefixes(n: usize) -> Vec<Vec<Prefix>> {
     let mut list: Vec<Vec<Prefix>> = vec!();
     let mut base = Prefix::new(vec!(0), 0);
     base.set_length_in_bits(log2 as usize);
-    println!("log2: {}", log2);
     for _ in 0..z {
         list.push(vec!(base.clone()));
         base.increment();
     }
-    println!("base: {:?}", base);
     base.set_length_in_bits(log2 as usize + 1);
     for _ in 0..2*r {
         list.push(vec!(base.clone()));

@@ -1,22 +1,25 @@
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::collections::hash_map::Entry;
+use std::sync::Arc;
 
 use drop::crypto::{key::exchange::Exchanger, Digest};
 use drop::net::{Connector, DirectoryInfo, TcpConnector};
 
 use super::{
     history_tree::HistoryTree, DataTree, RecordID, RuleTransaction,
-    TxRequest, TxResponse, Prefix,
+    UserCoreRequest, UserCoreResponse, TobRequest, TobResponse, 
+    ExecuteResult, PayloadForTob, Touch, Prefix, prefix
 };
 
 use super::{ClientError, InconsistencyError, ReplyError};
 
-use futures::future;
+use std::future::Future;
+use futures::future::{self, FutureExt};
 
 use tracing::{error, debug};
 
 pub struct ClientNode {
-    prefix_list: Vec<(Prefix, Vec<Rc<DirectoryInfo>>)>,
+    prefix_list: Vec<(Prefix, Vec<Arc<DirectoryInfo>>)>,
     connector: TcpConnector,
     tob_info: DirectoryInfo,
 }
@@ -27,17 +30,17 @@ impl ClientNode {
         corenodes_info: Vec<DirectoryInfo>,
         mut prefix_info: Vec<Vec<Prefix>>,
     ) -> Result<Self, ClientError> {
-        let mut p_map = HashMap::<Prefix, Vec<Rc<DirectoryInfo>>>::new();
+        let mut p_map = HashMap::<Prefix, Vec<Arc<DirectoryInfo>>>::new();
 
         for (i, ps) in prefix_info.drain(..).enumerate() {
-            let c_ref = Rc::new(corenodes_info[i]);
+            let c_ref = Arc::new(corenodes_info[i]);
             for p in ps {
                 let e = p_map.entry(p).or_insert(vec!());
-                e.push(Rc::clone(&c_ref));
+                e.push(Arc::clone(&c_ref));
             }
         }
 
-        let mut prefix_list: Vec<(Prefix, Vec<Rc<DirectoryInfo>>)> = p_map.drain().collect();
+        let mut prefix_list: Vec<(Prefix, Vec<Arc<DirectoryInfo>>)> = p_map.drain().collect();
         prefix_list.sort_by(|x, y| x.0.cmp(&y.0)); // Order by prefix
 
         let connector = TcpConnector::new(Exchanger::random());
@@ -51,49 +54,18 @@ impl ClientNode {
         Ok(ret)
     }
 
-    // returns all corenodes covering that record
-    fn covering(&self, r_id: &RecordID) -> Vec<Rc<DirectoryInfo>> {
-        let h = Prefix::new(drop::crypto::hash(r_id).unwrap().as_ref().to_vec(), 0);
-        let mut ret: Vec<Rc<DirectoryInfo>> = vec!();
-        for (p, v) in self.prefix_list.iter() {
-            if p.includes(&h) || h.includes(&p) {
-                for di in v {
-                    if !ret.contains(&di) {
-                        ret.push(Rc::clone(&di));
-                    }
-                }
-            }
-        }
-        ret
-    }
-
-    // returns all corenode-prefix assignments, covering all records.
-    fn assignments(&self, records: &Vec<RecordID>) -> HashMap<Rc<DirectoryInfo>, Vec<RecordID>> {
-        let mut m: HashMap<Rc<DirectoryInfo>, Vec<RecordID>> =
-            HashMap::new();
-
-        for r_id in records.iter() {
-            let infos = self.covering(r_id);
-            debug!("Closest to {} is {:?}", r_id, &infos);
-            for i in infos {
-                let e = m.entry(i).or_insert(Vec::new());
-                e.push(r_id.clone());
-            }
-        }
-
-        m
-    }
-
+    // Sends a request to get proof to all corenodes covering one of the records
+    // Currently blocks if any of the nodes fail to reply (TO FIX)
     pub async fn get_merkle_proofs(
         &self,
         records: Vec<RecordID>,
     ) -> Result<DataTree, ClientError> {
-        let mut m = self.assignments(&records);
+        let mut m = prefix::assignments(&self.prefix_list, &records);
 
-        let txr: &TxRequest = &records.clone().into();
+        let txr: &UserCoreRequest = &records.clone().into();
 
         let mut results =
-            future::join_all(m.drain().map(|(k, v)| async move {
+            future::join_all(m.drain().map(|(k, v)| async move {    // change joinall to tolerate non-reponding nodes
                 (v, self.get_merkle_proof(&k, txr).await)
             }))
             .await;
@@ -133,10 +105,10 @@ impl ClientNode {
     async fn get_merkle_proof(
         &self,
         corenode_info: &DirectoryInfo,
-        records: &TxRequest,
+        records: &UserCoreRequest,
     ) -> Result<(usize, DataTree), ClientError> {
         match records {
-            TxRequest::Execute(_) => panic!("'records' must be of the form &TxRequest::GetProof"),
+            UserCoreRequest::Execute(_) => panic!("'records' must be of the form &UserCoreRequest::GetProof"),
             _ => (),
         }
 
@@ -146,22 +118,97 @@ impl ClientNode {
             .await?;
 
         connection.send(records).await?;
-        let resp = connection.receive::<TxResponse>().await?;
+        let resp = connection.receive::<UserCoreResponse>().await?;
         match resp {
-            TxResponse::GetProof(proof) => Ok(proof),
+            UserCoreResponse::GetProof(proof) => Ok(proof),
             _ => return Err(ReplyError::new().into()),
         }
     }
 
-    pub async fn send_transaction_request<T: classic::Serialize>(
+    async fn send_execution_request(
+        &self,
+        corenode_info: &DirectoryInfo,
+        execute: &UserCoreRequest,
+    ) -> Result<ExecuteResult, ClientError> {
+        match execute {
+            UserCoreRequest::GetProof(_) => panic!("'records' must be of the form &UserCoreRequest::Execute"),
+            _ => (),
+        }
+
+        let mut connection = self
+            .connector
+            .connect(corenode_info.public(), &corenode_info.addr())
+            .await?;
+
+        connection.send(execute).await?;
+        let resp = connection.receive::<UserCoreResponse>().await?;
+        match resp {
+            UserCoreResponse::Execute(result) => Ok(result),
+            _ => return Err(ReplyError::new().into()),
+        }
+    }
+
+    // Collects results from corenodes until there is a majority of replies with the same result
+    async fn collect_results(futures: Vec<impl Future<Output=Result<ExecuteResult, ClientError>> + Unpin>) -> ExecuteResult {
+        let n = futures.len();
+        let threshold = n/2 + 1;
+
+        let mut remaining = futures;
+
+        let mut counts: HashMap<ExecuteResult, usize> = HashMap::new();
+
+        loop {
+            let ret = future::select_all(remaining).await;
+            let r = ret.0;
+            remaining = ret.2;
+
+            if let Ok(r) = r {
+                match counts.entry(r) {
+                    Entry::Vacant(entry) => {
+                        if threshold == 1 {
+                            return entry.into_key();
+                        } else {
+                            entry.insert(1);
+                        }
+                    }
+                    Entry::Occupied(mut entry) => {
+                        if entry.get() + 1 == threshold {
+                            return entry.remove_entry().0;
+                        } else {
+                            *entry.get_mut() += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Sends a request to execute to all corenodes responsible for running this rule
+    // Currently blocks if any of the nodes fail to reply (TO FIX)
+    pub async fn send_execution_requests<T: classic::Serialize>(
         &self,
         proof: DataTree,
         rule: RecordID,
         rule_version: Digest,
         touched_records: Vec<RecordID>,
         args: &T,
-    ) -> Result<(), ClientError> {
-        let rt = RuleTransaction::new(proof, rule, rule_version, touched_records, args);
+    ) -> ExecuteResult {
+        let rt = RuleTransaction::new(proof, rule.clone(), rule_version, touched_records, args);
+        let mut m = prefix::assignments(&self.prefix_list, &vec!(rule));
+
+        let txr: &UserCoreRequest = &UserCoreRequest::Execute(rt);
+
+        let f: Vec<_> = m.drain().map(|(k, _)| async move {
+            self.send_execution_request(&k, txr).await
+        }.boxed()).collect();
+
+        ClientNode::collect_results(f).await
+    }
+
+    // Missing signatures
+    pub async fn send_apply_request(&self, rule_record_id: String, input: DataTree, result: Vec<(RecordID, Touch)>) -> Result<(), ClientError> {
+        let payload = PayloadForTob::new(rule_record_id, input, result);
+        let txr = TobRequest::Apply(payload);
 
         let exchanger = Exchanger::random();
         let connector = TcpConnector::new(exchanger);
@@ -169,10 +216,9 @@ impl ClientNode {
             .connect(self.tob_info.public(), &self.tob_info.addr())
             .await?;
 
-        let txr = TxRequest::Execute(rt);
         connection.send(&txr).await?;
 
-        connection.receive::<TxResponse>().await?;
+        connection.receive::<TobResponse>().await?;
 
         Ok(())
     }
@@ -222,7 +268,7 @@ mod test {
 
             assert!(t.get_validator().validate(&proof));
         }
-        .instrument(trace_span!("get_merkle_proofs"))
+        .instrument(trace_span!("test_client_get_merkle_proofs"))
         .await;
 
         config.tear_down().await;
@@ -236,7 +282,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn client_send_transaction_request() {
+    async fn client_send_execution_request() {
         init_logger();
         let nr_peer = 1;
 
@@ -265,26 +311,23 @@ mod test {
                 .get_merkle_proofs(vec![
                     "Alice".to_string(),
                     "Bob".to_string(),
-                    "transfer_rule".to_string(),
                 ])
                 .await
                 .expect("merkle proof error");
 
             let args = ("Alice".to_string(), "Bob".to_string(), 50i32);
             client_node
-                .send_transaction_request(
+                .send_execution_requests(
                     proof,
                     "transfer_rule".to_string(),
                     rule_digest,
                     vec![
                         "Alice".to_string(),
                         "Bob".to_string(),
-                        "transfer_rule".to_string(),
                     ],
                     &args,
                 )
-                .await
-                .expect("error sending request");
+                .await;
 
             // info!("Awaiting");
             // let _ = timeout(Duration::from_millis(2000), future::pending::<()>()).await;
@@ -297,7 +340,7 @@ mod test {
             assert_eq!(get_i32_from_result(&"Alice".to_string(), &result), 950);
             assert_eq!(get_i32_from_result(&"Bob".to_string(), &result), 1050);
         }
-        .instrument(trace_span!("get_merkle_proofs"))
+        .instrument(trace_span!("test_client_send_execution_request"))
         .await;
 
         config.tear_down().await;
@@ -336,7 +379,6 @@ mod test {
                 .get_merkle_proofs(vec![
                     "Alice".to_string(),
                     "Bob".to_string(),
-                    "transfer_rule".to_string(),
                 ])
                 .await
                 .expect("merkle proof error");
@@ -345,42 +387,37 @@ mod test {
                 .get_merkle_proofs(vec![
                     "Charlie".to_string(),
                     "Dave".to_string(),
-                    "transfer_rule".to_string(),
                 ])
                 .await
                 .expect("merkle proof error");
 
             let args_1 = ("Alice".to_string(), "Bob".to_string(), 50i32);
             client_node_1
-                .send_transaction_request(
+                .send_execution_requests(
                     proof_1,
                     "transfer_rule".to_string(),
                     rule_digest,
                     vec![
                         "Alice".to_string(),
                         "Bob".to_string(),
-                        "transfer_rule".to_string(),
                     ],
                     &args_1,
                 )
-                .await
-                .expect("error sending request");
+                .await;
 
             let args_2 = ("Charlie".to_string(), "Dave".to_string(), 50i32);
             client_node_2
-                .send_transaction_request(
+                .send_execution_requests(
                     proof_2,
                     "transfer_rule".to_string(),
                     rule_digest,
                     vec![
                         "Charlie".to_string(),
                         "Dave".to_string(),
-                        "transfer_rule".to_string(),
                     ],
                     &args_2,
                 )
-                .await
-                .expect("error sending request");
+                .await;
 
             let result = client_node_1
                 .get_merkle_proofs(vec![
@@ -400,7 +437,7 @@ mod test {
             );
             assert_eq!(get_i32_from_result(&"Dave".to_string(), &result), 1050);
         }
-        .instrument(trace_span!("get_merkle_proofs"))
+        .instrument(trace_span!("test_late_request_consistent"))
         .await;
 
         config.tear_down().await;
@@ -437,7 +474,6 @@ mod test {
                 .get_merkle_proofs(vec![
                     "Alice".to_string(),
                     "Bob".to_string(),
-                    "transfer_rule".to_string(),
                 ])
                 .await
                 .expect("merkle proof error");
@@ -446,42 +482,37 @@ mod test {
                 .get_merkle_proofs(vec![
                     "Alice".to_string(),
                     "Bob".to_string(),
-                    "transfer_rule".to_string(),
                 ])
                 .await
                 .expect("merkle proof error");
 
             let args_1 = ("Alice".to_string(), "Bob".to_string(), 50i32);
             client_node_1
-                .send_transaction_request(
+                .send_execution_requests(
                     proof_1,
                     "transfer_rule".to_string(),
                     rule_digest,
                     vec![
                         "Alice".to_string(),
                         "Bob".to_string(),
-                        "transfer_rule".to_string(),
                     ],
                     &args_1,
                 )
-                .await
-                .expect("error sending request");
+                .await;
 
             let args_2 = ("Charlie".to_string(), "Dave".to_string(), 50i32);
             client_node_2
-                .send_transaction_request(
+                .send_execution_requests(
                     proof_2,
                     "transfer_rule".to_string(),
                     rule_digest,
                     vec![
                         "Charlie".to_string(),
                         "Dave".to_string(),
-                        "transfer_rule".to_string(),
                     ],
                     &args_2,
                 )
-                .await
-                .expect("error sending request");
+                .await;
 
             let result = client_node_1
                 .get_merkle_proofs(vec!["Alice".to_string(), "Bob".to_string()])
@@ -491,7 +522,7 @@ mod test {
             assert_eq!(get_i32_from_result(&"Alice".to_string(), &result), 950);
             assert_eq!(get_i32_from_result(&"Bob".to_string(), &result), 1050);
         }
-        .instrument(trace_span!("get_merkle_proofs"))
+        .instrument(trace_span!("test_late_request_not_consistent"))
         .await;
 
         config.tear_down().await;
@@ -532,26 +563,23 @@ mod test {
                 .get_merkle_proofs(vec![
                     "Alice".to_string(),
                     "Bob".to_string(),
-                    "transfer_rule".to_string(),
                 ])
                 .await
                 .expect("merkle proof error");
 
             let args_1 = ("Alice".to_string(), "Bob".to_string(), 50i32);
             client_node_1
-                .send_transaction_request(
+                .send_execution_requests(
                     proof_1,
                     "transfer_rule".to_string(),
                     rule_digest,
                     vec![
                         "Alice".to_string(),
                         "Bob".to_string(),
-                        "transfer_rule".to_string(),
                     ],
                     &args_1,
                 )
-                .await
-                .expect("error sending request");
+                .await;
 
             let _ =
                 timeout(Duration::from_secs(2), future::pending::<()>()).await;
@@ -560,26 +588,23 @@ mod test {
                 .get_merkle_proofs(vec![
                     "Charlie".to_string(),
                     "Dave".to_string(),
-                    "transfer_rule".to_string(),
                 ])
                 .await
                 .expect("merkle proof error");
 
             let args_1 = ("Charlie".to_string(), "Dave".to_string(), 100i32);
             client_node_1
-                .send_transaction_request(
+                .send_execution_requests(
                     proof_1,
                     "transfer_rule".to_string(),
                     rule_digest,
                     vec![
                         "Charlie".to_string(),
                         "Dave".to_string(),
-                        "transfer_rule".to_string(),
                     ],
                     &args_1,
                 )
-                .await
-                .expect("error sending request");
+                .await;
 
             let _ =
                 timeout(Duration::from_secs(2), future::pending::<()>()).await;
@@ -600,7 +625,7 @@ mod test {
             assert_eq!(get_i32_from_result(&"Justin".to_string(), &result), 1000);
             assert_eq!(get_i32_from_result(&"Irina".to_string(), &result), 1000);
         }
-        .instrument(trace_span!("get_merkle_proofs"))
+        .instrument(trace_span!("test_request_in_ancient_history"))
         .await;
 
         config.tear_down().await;
@@ -625,10 +650,6 @@ mod test {
         for &k in records.iter() {
             t.insert(String::from(k), (1000i32).to_be_bytes().to_vec());
         }
-        t.insert(
-            "transfer_rule".to_string(),
-            (1000i32).to_be_bytes().to_vec(),
-        );
 
         t.insert("transfer_rule".to_string(), rule_buffer);
 
@@ -645,26 +666,23 @@ mod test {
                 .get_merkle_proofs(vec![
                     "Alice".to_string(),
                     "Bob".to_string(),
-                    "transfer_rule".to_string(),
                 ])
                 .await
                 .expect("merkle proof error");
 
             let args_1 = ("Alice".to_string(), "Bob".to_string(), 50i32);
             client_node_1
-                .send_transaction_request(
+                .send_execution_requests(
                     proof_1,
                     "transfer_rule".to_string(),
                     rule_digest,
                     vec![
                         "Alice".to_string(),
                         "Bob".to_string(),
-                        "transfer_rule".to_string(),
                     ],
                     &args_1,
                 )
-                .await
-                .expect("error sending request");
+                .await;
 
             let _ =
                 timeout(Duration::from_secs(5), future::pending::<()>()).await;
@@ -673,26 +691,23 @@ mod test {
                 .get_merkle_proofs(vec![
                     "Charlie".to_string(),
                     "Dave".to_string(),
-                    "transfer_rule".to_string(),
                 ])
                 .await
                 .expect("merkle proof error");
 
             let args_1 = ("Charlie".to_string(), "Dave".to_string(), 100i32);
             client_node_1
-                .send_transaction_request(
+                .send_execution_requests(
                     proof_1,
                     "transfer_rule".to_string(),
                     rule_digest,
                     vec![
                         "Charlie".to_string(),
                         "Dave".to_string(),
-                        "transfer_rule".to_string(),
                     ],
                     &args_1,
                 )
-                .await
-                .expect("error sending request");
+                .await;
 
             let _ =
                 timeout(Duration::from_secs(5), future::pending::<()>()).await;
@@ -701,26 +716,23 @@ mod test {
                 .get_merkle_proofs(vec![
                     "Aaron".to_string(),
                     "Vanessa".to_string(),
-                    "transfer_rule".to_string(),
                 ])
                 .await
                 .expect("merkle proof error");
 
             let args_1 = ("Aaron".to_string(), "Vanessa".to_string(), 150i32);
             client_node_1
-                .send_transaction_request(
+                .send_execution_requests(
                     proof_1,
                     "transfer_rule".to_string(),
                     rule_digest,
                     vec![
                         "Aaron".to_string(),
                         "Vanessa".to_string(),
-                        "transfer_rule".to_string(),
                     ],
                     &args_1,
                 )
-                .await
-                .expect("error sending request");
+                .await;
 
             let _ =
                 timeout(Duration::from_secs(5), future::pending::<()>()).await;
@@ -729,28 +741,25 @@ mod test {
                 .get_merkle_proofs(vec![
                     "Justin".to_string(),
                     "Irina".to_string(),
-                    "transfer_rule".to_string(),
                 ])
                 .await
                 .expect("merkle proof error");
 
             let args_1 = ("Justin".to_string(), "Irina".to_string(), 200i32);
             client_node_1
-                .send_transaction_request(
+                .send_execution_requests(
                     proof_1,
                     "transfer_rule".to_string(),
                     rule_digest,
                     vec![
                         "Justin".to_string(),
                         "Irina".to_string(),
-                        "transfer_rule".to_string(),
                     ],
                     &args_1,
                 )
-                .await
-                .expect("error sending request");
+                .await;
         }
-        .instrument(trace_span!("get_merkle_proofs"))
+        .instrument(trace_span!("test_mixed_get_proofs"))
         .await;
 
         config.tear_down().await;
@@ -811,7 +820,7 @@ mod test {
             vd.sort();
             info!("Median: {:?}\nDurations: {:?}", vd.get(50).unwrap(), vd)
         }
-        .instrument(trace_span!("get_merkle_proofs"))
+        .instrument(trace_span!("test_merkle_proof_time"))
         .await;
 
         config.tear_down().await;
@@ -859,15 +868,14 @@ mod test {
                 let v: Vec<u8> = vec![0];
                 let args = (1.to_string(), v);
                 client_node
-                    .send_transaction_request(
+                    .send_execution_requests(
                         proof,
                         "transfer_rule".to_string(),
                         rule_digest,
                         vec![1.to_string(), "transfer_rule".to_string()],
                         &args,
                     )
-                    .await
-                    .expect("error sending request");
+                    .await;
             }
 
             let _ =
@@ -889,15 +897,14 @@ mod test {
                 let v: Vec<u8> = vec![1u8; 10000];
                 let args = (2.to_string(), v);
                 client_node
-                    .send_transaction_request(
+                    .send_execution_requests(
                         proof,
                         "transfer_rule".to_string(),
                         rule_digest,
                         vec![2.to_string(), "transfer_rule".to_string()],
                         &args,
                     )
-                    .await
-                    .expect("error sending request");
+                    .await;
             }
 
             for _ in 0..4 {
@@ -912,18 +919,17 @@ mod test {
                 let v: Vec<u8> = vec![0];
                 let args = (1.to_string(), v);
                 client_node
-                    .send_transaction_request(
+                    .send_execution_requests(
                         proof,
                         "transfer_rule".to_string(),
                         rule_digest,
                         vec![1.to_string(), "transfer_rule".to_string()],
                         &args,
                     )
-                    .await
-                    .expect("error sending request");
+                    .await;
             }
         }
-        .instrument(trace_span!("get_merkle_proofs"))
+        .instrument(trace_span!("test_memory_footpring"))
         .await;
 
         config.tear_down().await;
@@ -978,15 +984,14 @@ mod test {
                 let v: Vec<u8> = vec![1];
                 let args = (n.to_string(), v);
                 client_node
-                    .send_transaction_request(
+                    .send_execution_requests(
                         p,
                         "transfer_rule".to_string(),
                         rule_digest,
                         vec![n.to_string(), "transfer_rule".to_string()],
                         &args,
                     )
-                    .await
-                    .expect("error sending request");
+                    .await;
             }
 
             let _ =
@@ -1019,7 +1024,7 @@ mod test {
 
             info!("Total is: {}", total);
         }
-        .instrument(trace_span!("get_merkle_proofs"))
+        .instrument(trace_span!("test_success_rate"))
         .await;
 
         config.tear_down().await;

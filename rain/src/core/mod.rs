@@ -1,6 +1,9 @@
 mod client;
 mod corenode;
 mod module_cache;
+mod memory_usage;
+
+pub mod prefix;
 pub mod history_tree;
 pub mod simulated_contract;
 mod tob_server;
@@ -11,7 +14,7 @@ pub mod test;
 pub use client::ClientNode;
 pub use corenode::CoreNode;
 pub use tob_server::TobServer;
-pub use history_tree::Prefix;
+pub use prefix::Prefix;
 pub use module_cache::{ModuleCache, ModuleCacheError};
 use history_tree::HistoryTree;
 
@@ -69,32 +72,78 @@ type HTree = HistoryTree<RecordID, RecordVal>;
 #[derive(
     classic::Serialize, classic::Deserialize, Debug, Clone, Hash, PartialEq, Eq,
 )]
-enum TxRequest {
+enum UserCoreRequest {   // Request from User to Corenode
     GetProof(Vec<RecordID>),
     Execute(RuleTransaction),
 }
 
-impl From<Vec<RecordID>> for TxRequest {
+impl From<Vec<RecordID>> for UserCoreRequest {
     fn from(v: Vec<RecordID>) -> Self {
-        TxRequest::GetProof(v)
+        UserCoreRequest::GetProof(v)
     }
+}
+
+unsafe impl Send for UserCoreRequest {}
+unsafe impl Sync for UserCoreRequest {}
+impl classic::Message for UserCoreRequest {}
+
+#[derive(
+    classic::Serialize, classic::Deserialize, Debug, Clone, Hash, PartialEq, Eq,
+)]
+enum UserCoreResponse {
+    GetProof((usize, Tree<RecordID, RecordVal>)),
+    Execute(ExecuteResult),
+}
+
+unsafe impl Send for UserCoreResponse {}
+unsafe impl Sync for UserCoreResponse {}
+impl classic::Message for UserCoreResponse {}
+
+#[derive(
+    classic::Serialize, classic::Deserialize, Debug, Clone, Hash, PartialEq, Eq,
+)]
+pub struct ExecuteResult {
+    rule_record_id: String,
+    rule_version: Digest,
+    output: Result<Vec<(RecordID, Touch)>, String>,
 }
 
 #[derive(
     classic::Serialize, classic::Deserialize, Debug, Clone, Hash, PartialEq, Eq,
 )]
-enum TxResponse {
-    GetProof((usize, Tree<RecordID, RecordVal>)),
-    Execute(String),
+enum Touch {
+    Read,
+    Deleted,
+    Modified(RecordVal),
+    Added(RecordVal),
 }
 
-unsafe impl Send for TxRequest {}
-unsafe impl Sync for TxRequest {}
-impl classic::Message for TxRequest {}
+impl ExecuteResult {
+    pub fn new(
+        rule_record_id: RecordID,
+        rule_version: Digest,
+        ledger: Vec<(RecordID, Touch)>,
+    ) -> Self {
+        Self {
+            rule_record_id,
+            rule_version,
+            output: Ok(ledger),
+        }
+    }
 
-unsafe impl Send for TxResponse {}
-unsafe impl Sync for TxResponse {}
-impl classic::Message for TxResponse {}
+    pub fn fail(
+        rule_record_id: RecordID,
+        rule_version: Digest,
+        cause: String,
+    ) -> Self {
+        Self {
+            rule_record_id,
+            rule_version,
+            output: Err(cause),
+        }
+    }
+}
+
 
 #[derive(
     classic::Serialize, classic::Deserialize, Debug, Clone, Hash, PartialEq, Eq,
@@ -102,7 +151,7 @@ impl classic::Message for TxResponse {}
 pub struct RuleTransaction {
     merkle_proof: DataTree,
     rule_record_id: RecordID,
-    rule_record_version: Digest,
+    rule_version: Digest,
     touched_records: Vec<RecordID>,
     rule_arguments: Vec<u8>,
 }
@@ -118,9 +167,54 @@ impl RuleTransaction {
         Self {
             merkle_proof: proof,
             rule_record_id: rule,
-            rule_record_version: rule_digest,
+            rule_version: rule_digest,
             touched_records: touched_records,
             rule_arguments: bincode::serialize(args).unwrap(),
         }
     }
 }
+
+#[derive(
+    classic::Serialize, classic::Deserialize, Debug, Clone, Hash, PartialEq, Eq,
+)]
+pub enum TobRequest {
+    Apply(PayloadForTob),
+}
+
+unsafe impl Send for TobRequest {}
+unsafe impl Sync for TobRequest {}
+impl classic::Message for TobRequest {}
+
+#[derive(
+    classic::Serialize, classic::Deserialize, Debug, Clone, Hash, PartialEq, Eq,
+)]
+struct PayloadForTob {
+    rule_record_id: String,
+    input_merkle_proof: DataTree,
+    output: Vec<(RecordID, Touch)>,
+}
+
+impl PayloadForTob {
+    pub fn new(
+        rule_record_id: String,
+        input_merkle_proof: DataTree,
+        output: Vec<(RecordID, Touch)>
+    ) -> Self {
+        Self {
+            rule_record_id,
+            input_merkle_proof,
+            output,
+        }
+    }
+}
+
+#[derive(
+    classic::Serialize, classic::Deserialize, Debug, Clone, Hash, PartialEq, Eq,
+)]
+pub enum TobResponse {
+    Result(String),
+}
+
+unsafe impl Send for TobResponse {}
+unsafe impl Sync for TobResponse {}
+impl classic::Message for TobResponse {}

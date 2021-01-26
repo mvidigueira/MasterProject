@@ -7,7 +7,7 @@ use drop::net::{
     TcpConnector, TcpListener,
 };
 
-use super::{TxRequest, TxResponse};
+use super::{TobRequest, TobResponse};
 use classic::{BestEffort, BestEffortBroadcaster, Broadcaster, System};
 
 use super::{BroadcastError, TobServerError};
@@ -51,7 +51,7 @@ impl TobServer {
         )
         .await;
 
-        let (bebs, _) = BestEffort::with::<TxRequest>(sys);
+        let (bebs, _) = BestEffort::with::<TobRequest>(sys);
 
         let ret = (
             Self {
@@ -147,13 +147,13 @@ impl TobRequestHandler {
 
     async fn handle_broadcast(
         &mut self,
-        txr: TxRequest,
+        txr: TobRequest,
     ) -> Result<(), TobServerError> {
         if let Some(v) = self.beb.write().await.broadcast(&txr).await {
             if v.len() > 0 {
                 let _ = self
                     .connection
-                    .send(&TxResponse::Execute(String::from(
+                    .send(&TobResponse::Result(String::from(
                         "Error forwarding to peers",
                     )))
                     .await;
@@ -161,11 +161,12 @@ impl TobRequestHandler {
             }
         } else {
             error!("Broadcast instance not usable anymore!");
+            return Err(BroadcastError::new().into());
         }
 
         let _ = self
             .connection
-            .send(&TxResponse::Execute(String::from(
+            .send(&TobResponse::Result(String::from(
                 "Request successfully forwarded to all peers",
             )))
             .await;
@@ -174,16 +175,8 @@ impl TobRequestHandler {
     }
 
     async fn serve(mut self) -> Result<(), TobServerError> {
-        while let Ok(txr) = self.connection.receive::<TxRequest>().await {
-            match txr {
-                TxRequest::GetProof(_) => {
-                    error!("TxRequest::GetProof should be sent directly by a client, not via TOB!");
-                }
-                TxRequest::Execute(rt) => {
-                    info!("Received request {:?}", rt.rule_record_id);
-                    self.handle_broadcast(TxRequest::Execute(rt)).await?;
-                }
-            }
+        while let Ok(txr) = self.connection.receive::<TobRequest>().await {
+            self.handle_broadcast(txr).await?;
         }
 
         self.connection.close().await?;
@@ -197,7 +190,7 @@ impl TobRequestHandler {
 #[cfg(test)]
 mod test {
     use super::super::test::*;
-    use super::super::{DataTree, TxRequest, TxResponse};
+    use super::super::{DataTree, UserCoreRequest, TobResponse};
 
     use tracing::trace_span;
     use tracing_futures::Instrument;
@@ -226,17 +219,17 @@ mod test {
         let local = connection.local_addr().expect("getaddr failed");
 
         async move {
-            let txr = TxRequest::Execute(get_example_rt());
+            let txr = UserCoreRequest::Execute(get_example_rt());
             connection.send(&txr).await.expect("send failed");
 
             let resp = connection
-                .receive::<TxResponse>()
+                .receive::<TobResponse>()
                 .await
                 .expect("recv failed");
 
             assert_eq!(
                 resp,
-                TxResponse::Execute(String::from(
+                TobResponse::Result(String::from(
                     "Request successfully forwarded to all peers"
                 )),
                 "invalid response from tob server"
