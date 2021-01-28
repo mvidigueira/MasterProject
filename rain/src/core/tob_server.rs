@@ -190,7 +190,7 @@ impl TobRequestHandler {
 #[cfg(test)]
 mod test {
     use super::super::test::*;
-    use super::super::{DataTree, UserCoreRequest, TobResponse};
+    use super::super::{DataTree, TobRequest, TobResponse};
 
     use tracing::trace_span;
     use tracing_futures::Instrument;
@@ -219,7 +219,7 @@ mod test {
         let local = connection.local_addr().expect("getaddr failed");
 
         async move {
-            let txr = UserCoreRequest::Execute(get_example_rt());
+            let txr = TobRequest::Apply(get_example_tobpayload());
             connection.send(&txr).await.expect("send failed");
 
             let resp = connection

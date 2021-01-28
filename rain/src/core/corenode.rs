@@ -287,44 +287,43 @@ impl ClientRequestHandler {
             Ok(l) => l,
         };
 
+        info!("Execution successful, returning output_ledger");
         Ok(output_ledger)
     }
 
     async fn handle_execute(
         data: &mut ProtectedTree,
         module_cache: &mut ProtectedModuleCache,
-        rt: RuleTransaction,
+        mut rt: RuleTransaction,
     ) -> Result<ExecuteResult, CoreNodeError> {
         let used_record_count: usize = rt.merkle_proof.len();
         if used_record_count > RECORD_LIMIT {
             let cause = format!("Error processing transaction: record limit exceeded. Limit is {}, rule touches {}", RECORD_LIMIT, used_record_count);
-            error!(cause);
+            error!("{}", cause);
             return Ok(ExecuteResult::fail(rt.rule_record_id, rt.rule_version, cause));
         }
 
-        let mut tree_guard = data.write().await;
+        let tree_guard = data.read().await;
 
         if !tree_guard
             .consistent_given_records(&rt.merkle_proof, &rt.touched_records)
         {
             let cause = format!("Error processing transaction: invalid merkle proof");
-            error!(cause);
+            error!("{}", cause);
             return Ok(ExecuteResult::fail(rt.rule_record_id, rt.rule_version, cause));
         }
-
-
-        drop(tree_guard);
 
         let mut cache_guard = module_cache.write().await;
         let res = ClientRequestHandler::execute_transaction(&rt.rule_record_id, &rt.rule_version, &rt.rule_arguments, &rt.merkle_proof, &mut cache_guard, &tree_guard);
         drop(cache_guard);
+        drop(tree_guard);
+        
 
         match res {
             Err(_) => return Ok(ExecuteResult::fail(rt.rule_record_id, rt.rule_version, format!("failed executing transaction : error message WIP"))),
             Ok(mut output_ledger) => {
 
                 let mut output: Vec<(RecordID, Touch)> = vec!();
-                let mut records: HashSet<RecordID> = rt.touched_records.drain(..).collect();
 
                 let mut input_ledger: Ledger = rt
                 .merkle_proof
@@ -357,61 +356,13 @@ impl ClientRequestHandler {
                     }
                 }
 
+                output.sort_by(|x, y| x.0.cmp(&y.0));
+
+                info!("Created response. Returning...");
                 Ok(ExecuteResult::new(rt.rule_record_id, rt.rule_version, output))
             }
         }
     }
-
-    // match res {
-    //     Err(_) => return Ok(ExecuteResult::fail(rt.rule_record_id, rt.rule_version, "failed executing transaction : error message WIP")),
-    //     Ok(mut output_ledger) => {
-    //         let mut input_ledger: Ledger = rt
-    //         .merkle_proof
-    //         .clone_to_vec()
-    //         .into_iter()
-    //         .filter(|(k, _)| k != &rt.rule_record_id)
-    //         .collect();
-
-    //         tree_guard.merge_consistent(&rt.merkle_proof, &rt.touched_records);
-
-    //         for (k, v) in output_ledger.drain() {
-    //             match input_ledger.remove(&k) {
-    //                 // new (k,v)
-    //                 None => {
-    //                     //info!("Inserted {:?} into data tree.", (k.clone(), v.clone()));
-    //                     tree_guard.insert(k, v);
-    //                 }
-    //                 // modified (k,v)
-    //                 Some(v2) if v != v2 => {
-    //                     //info!("Inserted {:?} into data tree.", (k.clone(), v.clone()));
-    //                     tree_guard.insert(k, v);
-    //                 }
-    //                 _ => (),
-    //             }
-    //         }
-
-    //         for (k, _) in input_ledger.drain() {
-    //             //info!("Removed {:?} from data tree.", k);
-    //             tree_guard.remove(&k);
-    //         }
-
-    //         tree_guard.push_history();
-
-    //         // let (overhead, mut tree_size) =
-    //         let rep = MemoryReport::new(&tree_guard);
-    //         // This is excluding the memory occupied by the operation.
-    //         // This should be unnecessary once merkle tree memory usage is accurately determined.
-    //         // if rep.o_tree_serialized > bytes.len() {
-    //         //     rep.o_tree_serialized -= bytes.len();
-    //         // }
-    //         info!("Transaction applied: local data successfully updated.
-    //         {}", rep);
-    //     }
-    // }
-    
-    // drop(tree_guard);
-
-    // Ok(())
 
     async fn serve(mut self) -> Result<(), CoreNodeError> {
         while let Ok(txr) = self.connection.receive::<UserCoreRequest>().await {
@@ -437,7 +388,16 @@ impl ClientRequestHandler {
                         rt.rule_record_id
                     );
 
-                    Self::handle_execute(&mut self.data, &mut self.module_cache, rt)
+                    let result = Self::handle_execute(&mut self.data, &mut self.module_cache, rt)
+                        .await?;
+
+                    info!(
+                        "Replying to execute request. ExecuteResult: {:#?}",
+                        result
+                    );
+
+                    self.connection
+                        .send(&UserCoreResponse::Execute(result))
                         .await?;
                 }
             }
@@ -468,91 +428,20 @@ impl TobRequestHandler {
         }
     }
 
-    // async fn handle_apply_transaction(
-    //     data: &mut ProtectedTree,
-    //     rt: RuleTransaction,
-    // ) -> Result<ExecuteResult, CoreNodeError> {
-    //     let mut tree_guard = data.write().await;
-    //     let history_count = tree_guard.history_count;
-
-    //     let used_record_count: usize = rt.merkle_proof.len();
-    //     if used_record_count > RECORD_LIMIT {
-    //         let cause = format!("Error processing transaction: record limit exceeded. Limit is {}, rule touches {}", RECORD_LIMIT, used_record_count);
-    //         error!(cause);
-    //         return Ok(ExecuteResult::fail(rt.rule_record_id, rt.rule_version, history_count, cause));
-    //     }
-
-    //     if !tree_guard
-    //         .consistent_given_records(&rt.merkle_proof, &rt.touched_records)
-    //     {
-    //         let cause = format!("Error processing transaction: invalid merkle proof");
-    //         error!(cause);
-    //         return Ok(ExecuteResult::fail(rt.rule_record_id, rt.rule_version, history_count, cause));
-    //     }
-
-
-    //     drop(tree_guard);
-
-    //     let mut cache_guard = module_cache.write().await;
-    //     let res = ClientRequestHandler::execute_transaction(&rt.rule_record_id, &rt.rule_version, &rt.rule_arguments, &rt.merkle_proof, &mut cache_guard, &tree_guard);
-    //     drop(cache_guard);
-
-    //     match res {
-    //         Err(_) => return Ok(ExecuteResult::fail(rt.rule_record_id, rt.rule_version, history_count, format!("failed executing transaction : error message WIP"))),
-    //         Ok(mut output_ledger) => {
-
-    //             let mut output: Vec<(RecordID, Touch)> = vec!();
-    //             let mut records: HashSet<RecordID> = rt.touched_records.drain(..).collect();
-
-    //             let mut input_ledger: Ledger = rt
-    //             .merkle_proof
-    //             .clone_to_vec()
-    //             .into_iter()
-    //             .filter(|(k, _)| k != &rt.rule_record_id)
-    //             .collect();
-
-    //             for k in rt.touched_records.drain(..) {
-    //                 match (input_ledger.remove(&k), output_ledger.remove(&k)) {
-    //                     (None, Some(v)) => {
-    //                         output.push((k, Touch::Added(v)));
-    //                     },
-    //                     (None, None) => {
-    //                         output.push((k, Touch::Read));
-    //                     }
-    //                     (Some(_), None) => {
-    //                         output.push((k, Touch::Deleted));
-    //                     }
-    //                     (Some(v1), Some(v2)) => {
-    //                         let v = if v1 == v2 {
-    //                             Touch::Read
-    //                         } else {
-    //                             Touch::Modified(v2)
-    //                         };
-
-    //                         output.push((k, v));
-    //                     }
-
-    //                 }
-    //             }
-
-    //             Ok(ExecuteResult::new(rt.rule_record_id, rt.rule_version, history_count, output))
-    //         }
-    //     }
-    // }
-
     async fn serve(mut self) -> Result<(), CoreNodeError> {
         while let Ok(txr) = self.connection.receive::<TobRequest>().await {
             match txr {
-                TobRequest::Apply(req) => {
-                    let touched_records = req.output.iter().map(|x| x.0).collect();
-                    // TODO: receive and validate signatures
+                TobRequest::Apply(mut req) => {
+                    let touched_records = req.output.iter().map(|x| x.0.clone()).collect();
+
+                    // TODO: receive and validate signatures here
 
                     let mut tree_guard = self.data.write().await;
 
                     if !tree_guard.consistent_given_records(&req.input_merkle_proof, &touched_records)
                     {
                         let cause = format!("Error processing transaction: invalid merkle proof");
-                        error!(cause);
+                        error!("{}", cause);
                         continue;
                     }
 
@@ -581,9 +470,6 @@ impl TobRequestHandler {
                     // }
                     info!("Transaction applied: local data successfully updated.
                     {}", rep);
-
-
-                    unimplemented!();
                 }
             }
         }

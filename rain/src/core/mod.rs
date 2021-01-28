@@ -111,7 +111,7 @@ pub struct ExecuteResult {
 #[derive(
     classic::Serialize, classic::Deserialize, Debug, Clone, Hash, PartialEq, Eq,
 )]
-enum Touch {
+pub enum Touch {
     Read,
     Deleted,
     Modified(RecordVal),
@@ -188,7 +188,7 @@ impl classic::Message for TobRequest {}
 #[derive(
     classic::Serialize, classic::Deserialize, Debug, Clone, Hash, PartialEq, Eq,
 )]
-struct PayloadForTob {
+pub struct PayloadForTob {
     rule_record_id: String,
     input_merkle_proof: DataTree,
     output: Vec<(RecordID, Touch)>,

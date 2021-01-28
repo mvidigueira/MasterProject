@@ -288,6 +288,7 @@ mod test {
 
         let filename =
             "contract_3/target/wasm32-unknown-unknown/release/contract_test.wasm";
+        let rule_record_id = "transfer_rule".to_string();
         let rule_buffer =
             std::fs::read(filename).expect("could not load file into buffer");
         let rule_digest = drop::crypto::hash(&rule_buffer).unwrap();
@@ -295,7 +296,7 @@ mod test {
         let mut t = DataTree::new();
         t.insert("Alice".to_string(), (1000i32).to_be_bytes().to_vec());
         t.insert("Bob".to_string(), (1000i32).to_be_bytes().to_vec());
-        t.insert("transfer_rule".to_string(), rule_buffer);
+        t.insert(rule_record_id.clone(), rule_buffer);
 
         let config = SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 10).await;
         let corenodes_info = config.corenodes.iter().map(|x| x.2.clone()).collect();
@@ -316,10 +317,10 @@ mod test {
                 .expect("merkle proof error");
 
             let args = ("Alice".to_string(), "Bob".to_string(), 50i32);
-            client_node
+            let res = client_node
                 .send_execution_requests(
-                    proof,
-                    "transfer_rule".to_string(),
+                    proof.clone(),
+                    rule_record_id.clone(),
                     rule_digest,
                     vec![
                         "Alice".to_string(),
@@ -328,6 +329,15 @@ mod test {
                     &args,
                 )
                 .await;
+
+            client_node
+                .send_apply_request(
+                    rule_record_id.clone(),
+                    proof,
+                    res.output.unwrap()
+                )
+                .await
+                .expect("client error when sending apply request");
 
             // info!("Awaiting");
             // let _ = timeout(Duration::from_millis(2000), future::pending::<()>()).await;
@@ -353,6 +363,7 @@ mod test {
 
         let filename =
             "contract_3/target/wasm32-unknown-unknown/release/contract_test.wasm";
+        let rule_record_id = "transfer_rule".to_string();
         let rule_buffer =
             std::fs::read(filename).expect("could not load file into buffer");
         let rule_digest = drop::crypto::hash(&rule_buffer).unwrap();
@@ -362,7 +373,7 @@ mod test {
         t.insert("Bob".to_string(), (1000i32).to_be_bytes().to_vec());
         t.insert("Charlie".to_string(), (1000i32).to_be_bytes().to_vec());
         t.insert("Dave".to_string(), (1000i32).to_be_bytes().to_vec());
-        t.insert("transfer_rule".to_string(), rule_buffer);
+        t.insert(rule_record_id.clone(), rule_buffer);
 
         let config = SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 10).await;
         let corenodes_info: Vec<DirectoryInfo> = config.corenodes.iter().map(|x| x.2.clone()).collect();
@@ -392,10 +403,10 @@ mod test {
                 .expect("merkle proof error");
 
             let args_1 = ("Alice".to_string(), "Bob".to_string(), 50i32);
-            client_node_1
+            let res = client_node_1
                 .send_execution_requests(
-                    proof_1,
-                    "transfer_rule".to_string(),
+                    proof_1.clone(),
+                    rule_record_id.clone(),
                     rule_digest,
                     vec![
                         "Alice".to_string(),
@@ -404,12 +415,20 @@ mod test {
                     &args_1,
                 )
                 .await;
+            client_node_1
+                .send_apply_request(
+                    rule_record_id.clone(),
+                    proof_1,
+                    res.output.unwrap()
+                )
+                .await
+                .expect("client error when sending apply request");
 
             let args_2 = ("Charlie".to_string(), "Dave".to_string(), 50i32);
-            client_node_2
+            let res = client_node_2
                 .send_execution_requests(
-                    proof_2,
-                    "transfer_rule".to_string(),
+                    proof_2.clone(),
+                    rule_record_id.clone(),
                     rule_digest,
                     vec![
                         "Charlie".to_string(),
@@ -418,6 +437,14 @@ mod test {
                     &args_2,
                 )
                 .await;
+            client_node_2
+                .send_apply_request(
+                    rule_record_id.clone(),
+                    proof_2,
+                    res.output.unwrap()
+                )
+                .await
+                .expect("client error when sending apply request");
 
             let result = client_node_1
                 .get_merkle_proofs(vec![
@@ -450,6 +477,7 @@ mod test {
 
         let filename =
             "contract_3/target/wasm32-unknown-unknown/release/contract_test.wasm";
+        let rule_record_id = "transfer_rule".to_string();
         let rule_buffer =
             std::fs::read(filename).expect("could not load file into buffer");
         let rule_digest = drop::crypto::hash(&rule_buffer).unwrap();
@@ -457,7 +485,7 @@ mod test {
         let mut t = DataTree::new();
         t.insert("Alice".to_string(), (1000i32).to_be_bytes().to_vec());
         t.insert("Bob".to_string(), (1000i32).to_be_bytes().to_vec());
-        t.insert("transfer_rule".to_string(), rule_buffer);
+        t.insert(rule_record_id.clone(), rule_buffer);
 
         let config = SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 10).await;
         let corenodes_info: Vec<DirectoryInfo> = config.corenodes.iter().map(|x| x.2.clone()).collect();
@@ -470,15 +498,7 @@ mod test {
             let client_node_2 = ClientNode::new(tob_info, corenodes_info, get_balanced_prefixes(nr_peer))
                 .expect("client node 2 creation failed");
 
-            let proof_1 = client_node_1
-                .get_merkle_proofs(vec![
-                    "Alice".to_string(),
-                    "Bob".to_string(),
-                ])
-                .await
-                .expect("merkle proof error");
-
-            let proof_2 = client_node_2
+            let proof = client_node_1
                 .get_merkle_proofs(vec![
                     "Alice".to_string(),
                     "Bob".to_string(),
@@ -487,10 +507,10 @@ mod test {
                 .expect("merkle proof error");
 
             let args_1 = ("Alice".to_string(), "Bob".to_string(), 50i32);
-            client_node_1
+            let res = client_node_1
                 .send_execution_requests(
-                    proof_1,
-                    "transfer_rule".to_string(),
+                    proof.clone(),
+                    rule_record_id.clone(),
                     rule_digest,
                     vec![
                         "Alice".to_string(),
@@ -499,12 +519,20 @@ mod test {
                     &args_1,
                 )
                 .await;
+            client_node_1
+                .send_apply_request(
+                    rule_record_id.clone(),
+                    proof.clone(),
+                    res.output.unwrap()
+                )
+                .await
+                .expect("client error when sending apply request");
 
             let args_2 = ("Charlie".to_string(), "Dave".to_string(), 50i32);
-            client_node_2
+            let res = client_node_2
                 .send_execution_requests(
-                    proof_2,
-                    "transfer_rule".to_string(),
+                    proof.clone(),
+                    rule_record_id.clone(),
                     rule_digest,
                     vec![
                         "Charlie".to_string(),
@@ -513,6 +541,7 @@ mod test {
                     &args_2,
                 )
                 .await;
+            res.output.expect_err("Expected an error processing transaction due to the invalidated merkle proof");
 
             let result = client_node_1
                 .get_merkle_proofs(vec!["Alice".to_string(), "Bob".to_string()])
@@ -535,6 +564,7 @@ mod test {
 
         let filename =
             "contract_3/target/wasm32-unknown-unknown/release/contract_test.wasm";
+        let rule_record_id = "transfer_rule".to_string();
         let rule_buffer =
             std::fs::read(filename).expect("could not load file into buffer");
         let rule_digest = drop::crypto::hash(&rule_buffer).unwrap();
@@ -547,7 +577,7 @@ mod test {
         for &k in records.iter() {
             t.insert(String::from(k), (1000i32).to_be_bytes().to_vec());
         }
-        t.insert("transfer_rule".to_string(), rule_buffer);
+        t.insert(rule_record_id.clone(), rule_buffer);
 
         let config = SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 2).await;
         let corenodes_info: Vec<DirectoryInfo> = config.corenodes.iter().map(|x| x.2.clone()).collect();
@@ -568,10 +598,10 @@ mod test {
                 .expect("merkle proof error");
 
             let args_1 = ("Alice".to_string(), "Bob".to_string(), 50i32);
-            client_node_1
+            let res = client_node_1
                 .send_execution_requests(
-                    proof_1,
-                    "transfer_rule".to_string(),
+                    proof_1.clone(),
+                    rule_record_id.clone(),
                     rule_digest,
                     vec![
                         "Alice".to_string(),
@@ -580,6 +610,14 @@ mod test {
                     &args_1,
                 )
                 .await;
+            client_node_1
+                .send_apply_request(
+                    rule_record_id.clone(),
+                    proof_1,
+                    res.output.unwrap()
+                )
+                .await
+                .expect("client error when sending apply request");
 
             let _ =
                 timeout(Duration::from_secs(2), future::pending::<()>()).await;
@@ -593,10 +631,10 @@ mod test {
                 .expect("merkle proof error");
 
             let args_1 = ("Charlie".to_string(), "Dave".to_string(), 100i32);
-            client_node_1
+            let res = client_node_1
                 .send_execution_requests(
-                    proof_1,
-                    "transfer_rule".to_string(),
+                    proof_1.clone(),
+                    rule_record_id.clone(),
                     rule_digest,
                     vec![
                         "Charlie".to_string(),
@@ -605,6 +643,14 @@ mod test {
                     &args_1,
                 )
                 .await;
+            client_node_1
+                .send_apply_request(
+                    rule_record_id.clone(),
+                    proof_1,
+                    res.output.unwrap()
+                )
+                .await
+                .expect("client error when sending apply request");
 
             let _ =
                 timeout(Duration::from_secs(2), future::pending::<()>()).await;
@@ -638,6 +684,7 @@ mod test {
 
         let filename =
             "contract_3/target/wasm32-unknown-unknown/release/contract_test.wasm";
+        let rule_record_id = "transfer_rule".to_string();
         let rule_buffer =
             std::fs::read(filename).expect("could not load file into buffer");
         let rule_digest = drop::crypto::hash(&rule_buffer).unwrap();
@@ -651,7 +698,7 @@ mod test {
             t.insert(String::from(k), (1000i32).to_be_bytes().to_vec());
         }
 
-        t.insert("transfer_rule".to_string(), rule_buffer);
+        t.insert(rule_record_id.clone(), rule_buffer);
 
         // Setup a tob which only broadcasts to one of the nodes
         let config = SetupConfig::setup_asymetric(get_balanced_prefixes(nr_peer), 1, t.clone(), 10).await;
@@ -674,7 +721,7 @@ mod test {
             client_node_1
                 .send_execution_requests(
                     proof_1,
-                    "transfer_rule".to_string(),
+                    rule_record_id.clone(),
                     rule_digest,
                     vec![
                         "Alice".to_string(),
@@ -699,7 +746,7 @@ mod test {
             client_node_1
                 .send_execution_requests(
                     proof_1,
-                    "transfer_rule".to_string(),
+                    rule_record_id.clone(),
                     rule_digest,
                     vec![
                         "Charlie".to_string(),
@@ -724,7 +771,7 @@ mod test {
             client_node_1
                 .send_execution_requests(
                     proof_1,
-                    "transfer_rule".to_string(),
+                    rule_record_id.clone(),
                     rule_digest,
                     vec![
                         "Aaron".to_string(),
@@ -749,7 +796,7 @@ mod test {
             client_node_1
                 .send_execution_requests(
                     proof_1,
-                    "transfer_rule".to_string(),
+                    rule_record_id.clone(),
                     rule_digest,
                     vec![
                         "Justin".to_string(),
@@ -774,6 +821,7 @@ mod test {
 
         let filename =
             "contract_3/target/wasm32-unknown-unknown/release/contract_test.wasm";
+        let rule_record_id = "transfer_rule".to_string();
         let rule_buffer =
             std::fs::read(filename).expect("could not load file into buffer");
 
@@ -785,7 +833,7 @@ mod test {
         for &k in records.iter() {
             t.insert(String::from(k), (1000i32).to_be_bytes().to_vec());
         }
-        t.insert("transfer_rule".to_string(), rule_buffer);
+        t.insert(rule_record_id.clone(), rule_buffer);
 
         let config = SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 2).await;
         let corenodes_info: Vec<DirectoryInfo> = config.corenodes.iter().map(|x| x.2.clone()).collect();
@@ -804,7 +852,7 @@ mod test {
                 .get_merkle_proofs(vec![
                     "Alice".to_string(),
                     "Bob".to_string(),
-                    // "transfer_rule".to_string(),
+                    // rule_record_id.clone(),
                 ])
                 .await
                 .expect("merkle proof error");
@@ -833,6 +881,7 @@ mod test {
 
         let filename =
             "contract_3/target/wasm32-unknown-unknown/release/contract_test.wasm";
+        let rule_record_id = "transfer_rule".to_string();
         let rule_buffer =
             std::fs::read(filename).expect("could not load file into buffer");
         let rule_digest = drop::crypto::hash(&rule_buffer).unwrap();
@@ -841,7 +890,7 @@ mod test {
         for i in 0..1000 {
             t.insert(i.to_string(), vec![0]);
         }
-        t.insert("transfer_rule".to_string(), rule_buffer);
+        t.insert(rule_record_id.clone(), rule_buffer);
 
         let config = SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 3).await;
         let corenodes_info: Vec<DirectoryInfo> = config.corenodes.iter().map(|x| x.2.clone()).collect();
@@ -857,7 +906,7 @@ mod test {
                 let proof = client_node
                     .get_merkle_proofs(vec![
                         1.to_string(),
-                        "transfer_rule".to_string(),
+                        rule_record_id.clone(),
                     ])
                     .await
                     .expect("merkle proof error");
@@ -870,9 +919,9 @@ mod test {
                 client_node
                     .send_execution_requests(
                         proof,
-                        "transfer_rule".to_string(),
+                        rule_record_id.clone(),
                         rule_digest,
-                        vec![1.to_string(), "transfer_rule".to_string()],
+                        vec![1.to_string(), rule_record_id.clone()],
                         &args,
                     )
                     .await;
@@ -886,7 +935,7 @@ mod test {
                 let proof = client_node
                     .get_merkle_proofs(vec![
                         2.to_string(),
-                        "transfer_rule".to_string(),
+                        rule_record_id.clone(),
                     ])
                     .await
                     .expect("merkle proof error");
@@ -899,9 +948,9 @@ mod test {
                 client_node
                     .send_execution_requests(
                         proof,
-                        "transfer_rule".to_string(),
+                        rule_record_id.clone(),
                         rule_digest,
-                        vec![2.to_string(), "transfer_rule".to_string()],
+                        vec![2.to_string(), rule_record_id.clone()],
                         &args,
                     )
                     .await;
@@ -911,7 +960,7 @@ mod test {
                 let proof = client_node
                     .get_merkle_proofs(vec![
                         1.to_string(),
-                        "transfer_rule".to_string(),
+                        rule_record_id.clone(),
                     ])
                     .await
                     .expect("merkle proof error");
@@ -921,9 +970,9 @@ mod test {
                 client_node
                     .send_execution_requests(
                         proof,
-                        "transfer_rule".to_string(),
+                        rule_record_id.clone(),
                         rule_digest,
-                        vec![1.to_string(), "transfer_rule".to_string()],
+                        vec![1.to_string(), rule_record_id.clone()],
                         &args,
                     )
                     .await;
@@ -944,6 +993,7 @@ mod test {
 
         let filename =
             "contract_3/target/wasm32-unknown-unknown/release/contract_test.wasm";
+        let rule_record_id = "transfer_rule".to_string();
         let rule_buffer =
             std::fs::read(filename).expect("could not load file into buffer");
         let rule_digest = drop::crypto::hash(&rule_buffer).unwrap();
@@ -952,7 +1002,7 @@ mod test {
         for i in 0..1000 {
             t.insert(i.to_string(), vec![0]);
         }
-        t.insert("transfer_rule".to_string(), rule_buffer);
+        t.insert(rule_record_id.clone(), rule_buffer);
 
         let config = SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 20).await;
         let corenodes_info: Vec<DirectoryInfo> = config.corenodes.iter().map(|x| x.2.clone()).collect();
@@ -973,7 +1023,7 @@ mod test {
                 let proof = client_node
                     .get_merkle_proofs(vec![
                         n.to_string(),
-                        "transfer_rule".to_string(),
+                        rule_record_id.clone(),
                     ])
                     .await
                     .expect("merkle proof error");
@@ -986,9 +1036,9 @@ mod test {
                 client_node
                     .send_execution_requests(
                         p,
-                        "transfer_rule".to_string(),
+                        rule_record_id.clone(),
                         rule_digest,
-                        vec![n.to_string(), "transfer_rule".to_string()],
+                        vec![n.to_string(), rule_record_id.clone()],
                         &args,
                     )
                     .await;
