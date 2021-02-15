@@ -1,8 +1,8 @@
 use super::{HTree, MerkleError};
-use std::collections::{hash_map::Entry, HashMap};
 use drop::crypto::Digest;
+use std::collections::{hash_map::Entry, HashMap};
 
-use wasmer::{Store, JIT, Module, Instance, imports};
+use wasmer::{imports, Instance, Module, Store, JIT};
 #[cfg(not(feature = "native"))]
 use wasmer_compiler_cranelift::Cranelift;
 #[cfg(feature = "llvm")]
@@ -17,10 +17,10 @@ use tracing::error;
 fn get_store() -> Store {
     // The default backend
     let compiler = Cranelift::default();
-    
+
     #[cfg(feature = "singlepass")]
     let compiler = Singlepass::new();
-    
+
     #[cfg(feature = "llvm")]
     let compiler = LLVM::new();
 
@@ -49,10 +49,17 @@ pub struct ModuleCache {
 
 impl ModuleCache {
     pub fn new() -> Self {
-        ModuleCache{ map: HashMap::new() }
+        ModuleCache {
+            map: HashMap::new(),
+        }
     }
 
-    pub fn get_instance(&mut self, id: &String, hash: &Digest, h_tree: &HTree) -> Result<Instance, ModuleCacheError> {
+    pub fn get_instance(
+        &mut self,
+        id: &String,
+        hash: &Digest,
+        h_tree: &HTree,
+    ) -> Result<Instance, ModuleCacheError> {
         let module = self.load(id, hash, h_tree)?;
 
         let import_object = imports! {};
@@ -65,7 +72,12 @@ impl ModuleCache {
         }
     }
 
-    pub fn load(&mut self, id: &String, hash: &Digest, h_tree: &HTree) -> Result<&Module, ModuleCacheError> {
+    pub fn load(
+        &mut self,
+        id: &String,
+        hash: &Digest,
+        h_tree: &HTree,
+    ) -> Result<&Module, ModuleCacheError> {
         if !h_tree.covers(id) {
             return Err(ModuleCacheError::NotResponsible);
         }
@@ -73,7 +85,7 @@ impl ModuleCache {
         let bytes = match h_tree.get(id) {
             Err(MerkleError::KeyNonExistant) => {
                 return Err(ModuleCacheError::ModuleNotFound);
-            },
+            }
             Err(_) => unreachable!(),
             Ok(v) => v,
         };
@@ -114,7 +126,11 @@ impl ModuleCache {
         }
     }
 
-    pub fn try_caching(&mut self, id: &String, h_tree: &HTree) -> Result<(), ModuleCacheError> {
+    pub fn try_caching(
+        &mut self,
+        id: &String,
+        h_tree: &HTree,
+    ) -> Result<(), ModuleCacheError> {
         if !h_tree.covers(id) {
             return Err(ModuleCacheError::NotResponsible);
         }
@@ -122,7 +138,7 @@ impl ModuleCache {
         let hash = match h_tree.get(id) {
             Err(MerkleError::KeyNonExistant) => {
                 return Err(ModuleCacheError::ModuleNotFound);
-            },
+            }
             Err(_) => unreachable!(),
             Ok(v) => drop::crypto::hash(v).unwrap(),
         };

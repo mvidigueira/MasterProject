@@ -1,30 +1,34 @@
 mod client;
 mod corenode;
-mod module_cache;
 mod memory_usage;
-
-pub mod prefix;
-pub mod history_tree;
-pub mod simulated_contract;
+mod module_cache;
 mod tob_server;
+
+pub mod history_tree;
+pub mod prefix;
+// pub mod simulated_contract;
 
 #[cfg(test)]
 pub mod test;
 
 pub use client::ClientNode;
 pub use corenode::CoreNode;
-pub use tob_server::TobServer;
-pub use prefix::Prefix;
-pub use module_cache::{ModuleCache, ModuleCacheError};
+pub use corenode::Info as CoreNodeInfo;
 use history_tree::HistoryTree;
+pub use module_cache::{ModuleCache, ModuleCacheError};
+pub use prefix::Prefix;
+pub use prefix::SystemConfig;
+pub use tob_server::TobServer;
 
 use std::io::Error as IoError;
 
-use drop::error::Error;
-use drop::net::{
-    ConnectError, ListenerError, ReceiveError, SendError,
-};
 use drop::crypto::Digest;
+use drop::error::Error;
+use drop::net::{ConnectError, ListenerError, ReceiveError, SendError};
+
+use bls_amcl::common::{Keypair, Params, SigKey, VerKey};
+use bls_amcl::multi_sig_fast::{AggregatedVerKeyFast, MultiSignatureFast};
+use bls_amcl::simple::Signature;
 
 use merkle::{error::MerkleError, Tree};
 
@@ -72,7 +76,8 @@ type HTree = HistoryTree<RecordID, RecordVal>;
 #[derive(
     classic::Serialize, classic::Deserialize, Debug, Clone, Hash, PartialEq, Eq,
 )]
-enum UserCoreRequest {   // Request from User to Corenode
+enum UserCoreRequest {
+    // Request from User to Corenode
     GetProof(Vec<RecordID>),
     Execute(RuleTransaction),
 }
@@ -105,7 +110,12 @@ impl classic::Message for UserCoreResponse {}
 pub struct ExecuteResult {
     rule_record_id: String,
     rule_version: Digest,
+    misc_digest: Digest, // hash(rule_version, args)
     output: Result<Vec<(RecordID, Touch)>, String>,
+}
+
+pub fn get_misc_digest(rule_version: &Digest, args: &Vec<u8>) -> Digest {
+    drop::crypto::hash(&(rule_version, args)).unwrap()
 }
 
 #[derive(
@@ -122,11 +132,13 @@ impl ExecuteResult {
     pub fn new(
         rule_record_id: RecordID,
         rule_version: Digest,
+        misc_digest: Digest,
         ledger: Vec<(RecordID, Touch)>,
     ) -> Self {
         Self {
             rule_record_id,
             rule_version,
+            misc_digest,
             output: Ok(ledger),
         }
     }
@@ -134,16 +146,17 @@ impl ExecuteResult {
     pub fn fail(
         rule_record_id: RecordID,
         rule_version: Digest,
+        misc_digest: Digest,
         cause: String,
     ) -> Self {
         Self {
             rule_record_id,
             rule_version,
+            misc_digest: misc_digest,
             output: Err(cause),
         }
     }
 }
-
 
 #[derive(
     classic::Serialize, classic::Deserialize, Debug, Clone, Hash, PartialEq, Eq,
@@ -191,22 +204,30 @@ impl classic::Message for TobRequest {}
 pub struct PayloadForTob {
     rule_record_id: String,
     input_merkle_proof: DataTree,
+    misc_digest: Digest, // hash(rule_version, args)
     output: Vec<(RecordID, Touch)>,
 }
 
 impl PayloadForTob {
     pub fn new(
         rule_record_id: String,
+        misc_digest: Digest, // hash(rule_version, args)
         input_merkle_proof: DataTree,
-        output: Vec<(RecordID, Touch)>
+        output: Vec<(RecordID, Touch)>,
     ) -> Self {
         Self {
             rule_record_id,
+            misc_digest,
             input_merkle_proof,
             output,
         }
     }
 }
+
+// pub fn corenode_bls_sign(payload: &PayloadForTob) -> {
+//     let d = drop::crypto::hash(payload).unwrap();
+
+// }
 
 #[derive(
     classic::Serialize, classic::Deserialize, Debug, Clone, Hash, PartialEq, Eq,

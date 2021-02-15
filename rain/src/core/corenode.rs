@@ -1,23 +1,28 @@
+use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::collections::HashSet;
+
+use bls_amcl::common::{Params, SigKey, VerKey};
+use bls_amcl::common::Keypair as BlsKeypair;
 
 use drop::crypto::{
-    key::exchange::{Exchanger, PublicKey},
+    key::exchange::{Exchanger, PublicKey, KeyPair as CommKeyPair},
     Digest,
 };
 use drop::net::{
-    Connection, DirectoryInfo, Listener,
-    ListenerError, TcpListener,
+    Connection, DirectoryInfo, Listener, ListenerError, TcpListener,
 };
+use rand::thread_rng;
+
+use std::hash::{Hash, Hasher};
 
 use super::{
-    CoreNodeError, HTree, DataTree, RecordID, RuleTransaction, 
-    UserCoreRequest, UserCoreResponse, TobRequest, TobResponse,
-    ExecuteResult, ModuleCache, Prefix, Touch, memory_usage::MemoryReport
+    memory_usage::MemoryReport, CoreNodeError, DataTree, ExecuteResult, HTree,
+    ModuleCache, Prefix, RecordID, RuleTransaction, TobRequest, TobResponse,
+    Touch, UserCoreRequest, UserCoreResponse, SystemConfig
 };
-use wasm_common_bindings::{Ledger};
-use wasmer::{NativeFunc, MemoryView};
+use wasm_common_bindings::Ledger;
+use wasmer::{MemoryView, NativeFunc};
 
 use futures::future::{self, Either};
 
@@ -33,35 +38,65 @@ const RECORD_LIMIT: usize = 400;
 type ProtectedTree = Arc<RwLock<HTree>>;
 type ProtectedModuleCache = Arc<RwLock<ModuleCache>>;
 
+#[derive(Clone, PartialEq)]
+pub struct Info {
+    dir_info: DirectoryInfo,
+    bls_pkey: VerKey,
+}
+impl Eq for Info {}
+impl Hash for Info {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.dir_info.hash(state);
+        self.bls_pkey.to_bytes().hash(state);
+    }
+}
+impl Info {
+    /// Get the `DirectoryInfo` contained in this `Info`
+    pub fn bls_public(&self) -> &VerKey {
+        &self.bls_pkey
+    }
+
+    /// Get the bls public key `VerKey` contained in this `Info`
+    pub fn dir_info(&self) -> &DirectoryInfo {
+        &self.dir_info
+    }
+}
+
 pub struct CoreNode {
     listener: TcpListener,
     tob_pub_key: PublicKey,
     exit: Receiver<()>,
 
+    bls_kp: BlsKeypair,
+
     data: ProtectedTree,
     module_cache: ProtectedModuleCache,
+
+    corenodes_config: SystemConfig<Arc<DirectoryInfo>>,
 }
 
 impl CoreNode {
     pub async fn new(
         node_addr: SocketAddr,
+        comm_kp: CommKeyPair,
+        // bls_kp: BlsKeypair,
+
         tob_info: &DirectoryInfo,
+        corenodes_config: SystemConfig<Arc<DirectoryInfo>>,
+
         dt: DataTree,
         history_len: usize,
         prefix_list: Vec<Prefix>,
     ) -> Result<(Self, Sender<()>), CoreNodeError> {
         let (tx, rx) = channel();
 
-        let exchanger = Exchanger::random();
+        let exchanger = Exchanger::new(comm_kp);
 
         let listener = TcpListener::new(node_addr, exchanger.clone())
             .await
             .expect("listen failed");
 
-        let mut h_tree = HTree::new(
-            history_len,
-            prefix_list,
-        );
+        let mut h_tree = HTree::new(history_len, prefix_list);
 
         for (k, v) in dt.clone_to_vec().drain(..) {
             h_tree.add_touch(&k);
@@ -69,14 +104,22 @@ impl CoreNode {
         }
         h_tree.push_history();
 
+        let params = Params::new("some publicly known string".as_bytes());
+        let mut rng = thread_rng();
+        let bls_kp = BlsKeypair::new(&mut rng, &params);
+
         let ret = (
             Self {
                 listener: listener,
                 tob_pub_key: *tob_info.public(),
                 exit: rx,
 
+                bls_kp: bls_kp,
+
                 data: Arc::from(RwLock::new(h_tree)),
                 module_cache: Arc::from(RwLock::new(ModuleCache::new())),
+
+                corenodes_config: corenodes_config,
             },
             tx,
         );
@@ -117,33 +160,48 @@ impl CoreNode {
 
                 task::spawn(
                     async move {
-                        let client_handler = ClientRequestHandler::new(connection, data, module_cache);
-    
+                        let client_handler = ClientRequestHandler::new(
+                            connection,
+                            data,
+                            module_cache,
+                        );
+
                         if let Err(_) = client_handler.serve().await {
                             error!("failed request handling");
                         }
-                    }.instrument(trace_span!("client_request_receiver")),
+                    }
+                    .instrument(trace_span!("client_request_receiver")),
                 );
             } else {
                 info!("TOB server connection: {:?}", peer_pub);
-                
+
                 task::spawn(
                     async move {
-                        let request_handler = TobRequestHandler::new(connection, data);
-    
+                        let request_handler =
+                            TobRequestHandler::new(connection, data);
+
                         if let Err(_) = request_handler.serve().await {
                             error!("failed request handling");
                         }
-    
-                    }.instrument(trace_span!("tob_request_receiver")),
+                    }
+                    .instrument(trace_span!("tob_request_receiver")),
                 );
             }
-            
         }
     }
 
     pub fn public_key(&self) -> &PublicKey {
         self.listener.exchanger().keypair().public()
+    }
+
+    pub fn info(&self) -> Info {
+        Info {
+            dir_info: DirectoryInfo::from((
+                *self.public_key(),
+                self.listener.local_addr().unwrap(),
+            )),
+            bls_pkey: self.bls_kp.ver_key.clone(),
+        }
     }
 
     async fn poll_incoming(
@@ -212,22 +270,29 @@ impl ClientRequestHandler {
         Ok(())
     }
 
-    fn execute_transaction(rule_id: &String, rule_hash: &Digest, args: &Vec<u8>, tree: &DataTree, module_cache: &mut ModuleCache, local_tree: &HTree) -> Result<Ledger, ()> {
-        let instance = match module_cache.get_instance(rule_id, rule_hash, local_tree) {
-            Err(e) => {
-                error!("Error getting module instance: {:?}", e);
-                return Err(());
-            },
-            Ok(i) => i,
-        };
+    fn execute_transaction(
+        rule_id: &String,
+        rule_hash: &Digest,
+        args: &Vec<u8>,
+        tree: &DataTree,
+        module_cache: &mut ModuleCache,
+        local_tree: &HTree,
+    ) -> Result<Ledger, ()> {
+        let instance =
+            match module_cache.get_instance(rule_id, rule_hash, local_tree) {
+                Err(e) => {
+                    error!("Error getting module instance: {:?}", e);
+                    return Err(());
+                }
+                Ok(i) => i,
+            };
 
-        let input_ledger: Ledger = tree
-            .clone_to_vec()
-            .into_iter()
-            .collect();
+        let input_ledger: Ledger = tree.clone_to_vec().into_iter().collect();
 
-        let allocate: NativeFunc<i32, i32> = match instance.exports
-        .get_native_function("allocate_vec") {
+        let allocate: NativeFunc<i32, i32> = match instance
+            .exports
+            .get_native_function("allocate_vec")
+        {
             Err(e) => {
                 error!("Error finding mandatory 'allocate_vec' function in wasm module: {:?}", e);
                 return Err(());
@@ -235,8 +300,10 @@ impl ClientRequestHandler {
             Ok(alloc) => alloc,
         };
 
-        let execute: NativeFunc<(i32, i32), i32> = match instance.exports
-        .get_native_function("execute") {
+        let execute: NativeFunc<(i32, i32), i32> = match instance
+            .exports
+            .get_native_function("execute")
+        {
             Err(e) => {
                 error!("Error finding mandatory 'execute' function in wasm module: {:?}", e);
                 return Err(());
@@ -258,12 +325,15 @@ impl ClientRequestHandler {
         let mem = match instance.exports.get_memory("memory") {
             Ok(m) => m,
             Err(e) => {
-                error!("Error finding default memory 'memory' wasm module: {:?}", e);
+                error!(
+                    "Error finding default memory 'memory' wasm module: {:?}",
+                    e
+                );
                 return Err(());
             }
         };
 
-        let s: MemoryView<u8>  = mem.view();
+        let s: MemoryView<u8> = mem.view();
 
         for (i, v) in input.iter().enumerate() {
             s[ptr as usize + i].replace(*v);
@@ -276,7 +346,7 @@ impl ClientRequestHandler {
                 return Err(());
             }
         };
-        let s: MemoryView<u8>  = mem.view();
+        let s: MemoryView<u8> = mem.view();
 
         let s = s[..].iter().map(|x| x.get()).collect::<Vec<u8>>();
         let output_ledger = match wasm_common_bindings::get_result(&s, ptr) {
@@ -296,11 +366,19 @@ impl ClientRequestHandler {
         module_cache: &mut ProtectedModuleCache,
         mut rt: RuleTransaction,
     ) -> Result<ExecuteResult, CoreNodeError> {
+        let misc_digest =
+            super::get_misc_digest(&rt.rule_version, &rt.rule_arguments);
+
         let used_record_count: usize = rt.merkle_proof.len();
         if used_record_count > RECORD_LIMIT {
             let cause = format!("Error processing transaction: record limit exceeded. Limit is {}, rule touches {}", RECORD_LIMIT, used_record_count);
             error!("{}", cause);
-            return Ok(ExecuteResult::fail(rt.rule_record_id, rt.rule_version, cause));
+            return Ok(ExecuteResult::fail(
+                rt.rule_record_id,
+                rt.rule_version,
+                misc_digest,
+                cause,
+            ));
         }
 
         let tree_guard = data.read().await;
@@ -308,35 +386,53 @@ impl ClientRequestHandler {
         if !tree_guard
             .consistent_given_records(&rt.merkle_proof, &rt.touched_records)
         {
-            let cause = format!("Error processing transaction: invalid merkle proof");
+            let cause =
+                format!("Error processing transaction: invalid merkle proof");
             error!("{}", cause);
-            return Ok(ExecuteResult::fail(rt.rule_record_id, rt.rule_version, cause));
+            return Ok(ExecuteResult::fail(
+                rt.rule_record_id,
+                rt.rule_version,
+                misc_digest,
+                cause,
+            ));
         }
 
         let mut cache_guard = module_cache.write().await;
-        let res = ClientRequestHandler::execute_transaction(&rt.rule_record_id, &rt.rule_version, &rt.rule_arguments, &rt.merkle_proof, &mut cache_guard, &tree_guard);
+        let res = ClientRequestHandler::execute_transaction(
+            &rt.rule_record_id,
+            &rt.rule_version,
+            &rt.rule_arguments,
+            &rt.merkle_proof,
+            &mut cache_guard,
+            &tree_guard,
+        );
         drop(cache_guard);
         drop(tree_guard);
-        
 
         match res {
-            Err(_) => return Ok(ExecuteResult::fail(rt.rule_record_id, rt.rule_version, format!("failed executing transaction : error message WIP"))),
+            Err(_) => {
+                return Ok(ExecuteResult::fail(
+                    rt.rule_record_id,
+                    rt.rule_version,
+                    misc_digest,
+                    format!("failed executing transaction : error message WIP"),
+                ))
+            }
             Ok(mut output_ledger) => {
-
-                let mut output: Vec<(RecordID, Touch)> = vec!();
+                let mut output: Vec<(RecordID, Touch)> = vec![];
 
                 let mut input_ledger: Ledger = rt
-                .merkle_proof
-                .clone_to_vec()
-                .into_iter()
-                .filter(|(k, _)| k != &rt.rule_record_id)
-                .collect();
+                    .merkle_proof
+                    .clone_to_vec()
+                    .into_iter()
+                    .filter(|(k, _)| k != &rt.rule_record_id)
+                    .collect();
 
                 for k in rt.touched_records.drain(..) {
                     match (input_ledger.remove(&k), output_ledger.remove(&k)) {
                         (None, Some(v)) => {
                             output.push((k, Touch::Added(v)));
-                        },
+                        }
                         (None, None) => {
                             output.push((k, Touch::Read));
                         }
@@ -352,14 +448,18 @@ impl ClientRequestHandler {
 
                             output.push((k, v));
                         }
-
                     }
                 }
 
                 output.sort_by(|x, y| x.0.cmp(&y.0));
 
                 info!("Created response. Returning...");
-                Ok(ExecuteResult::new(rt.rule_record_id, rt.rule_version, output))
+                Ok(ExecuteResult::new(
+                    rt.rule_record_id,
+                    rt.rule_version,
+                    misc_digest,
+                    output,
+                ))
             }
         }
     }
@@ -388,8 +488,12 @@ impl ClientRequestHandler {
                         rt.rule_record_id
                     );
 
-                    let result = Self::handle_execute(&mut self.data, &mut self.module_cache, rt)
-                        .await?;
+                    let result = Self::handle_execute(
+                        &mut self.data,
+                        &mut self.module_cache,
+                        rt,
+                    )
+                    .await?;
 
                     info!(
                         "Replying to execute request. ExecuteResult: {:#?}",
@@ -411,41 +515,40 @@ impl ClientRequestHandler {
     }
 }
 
-
 struct TobRequestHandler {
     connection: Connection,
     data: ProtectedTree,
 }
 
 impl TobRequestHandler {
-    fn new(
-        connection: Connection,
-        data: ProtectedTree,
-    ) -> Self {
-        Self {
-            connection,
-            data,
-        }
+    fn new(connection: Connection, data: ProtectedTree) -> Self {
+        Self { connection, data }
     }
 
     async fn serve(mut self) -> Result<(), CoreNodeError> {
         while let Ok(txr) = self.connection.receive::<TobRequest>().await {
             match txr {
                 TobRequest::Apply(mut req) => {
-                    let touched_records = req.output.iter().map(|x| x.0.clone()).collect();
+                    let touched_records =
+                        req.output.iter().map(|x| x.0.clone()).collect();
 
                     // TODO: receive and validate signatures here
 
                     let mut tree_guard = self.data.write().await;
 
-                    if !tree_guard.consistent_given_records(&req.input_merkle_proof, &touched_records)
-                    {
+                    if !tree_guard.consistent_given_records(
+                        &req.input_merkle_proof,
+                        &touched_records,
+                    ) {
                         let cause = format!("Error processing transaction: invalid merkle proof");
                         error!("{}", cause);
                         continue;
                     }
 
-                    tree_guard.merge_consistent(&req.input_merkle_proof, &touched_records);
+                    tree_guard.merge_consistent(
+                        &req.input_merkle_proof,
+                        &touched_records,
+                    );
 
                     for (k, t) in req.output.drain(..) {
                         match t {
@@ -458,9 +561,9 @@ impl TobRequestHandler {
                             Touch::Read => (),
                         }
                     }
-        
+
                     tree_guard.push_history();
-        
+
                     // let (overhead, mut tree_size) =
                     let rep = MemoryReport::new(&tree_guard);
                     // This is excluding the memory occupied by the operation.
@@ -468,8 +571,11 @@ impl TobRequestHandler {
                     // if rep.o_tree_serialized > bytes.len() {
                     //     rep.o_tree_serialized -= bytes.len();
                     // }
-                    info!("Transaction applied: local data successfully updated.
-                    {}", rep);
+                    info!(
+                        "Transaction applied: local data successfully updated.
+                    {}",
+                        rep
+                    );
                 }
             }
         }
@@ -485,11 +591,13 @@ impl TobRequestHandler {
 #[cfg(test)]
 mod test {
     use super::super::test::*;
-    use super::super::{DataTree, UserCoreRequest, UserCoreResponse, TobRequest, TobResponse};
+    use super::super::{
+        DataTree, TobRequest, TobResponse, UserCoreRequest, UserCoreResponse,
+    };
     extern crate test;
+    use super::*;
     use test::Bencher;
     use wasm_common_bindings::{ContextLedger, Ledger};
-    use super::*;
 
     use tracing::trace_span;
     use tracing_futures::Instrument;
@@ -500,14 +608,17 @@ mod test {
 
         let fake_tob_addr = next_test_ip4();
         let exchanger = Exchanger::random();
-        let fake_tob_info = DirectoryInfo::from((*exchanger.keypair().public(), fake_tob_addr));
+        let fake_tob_info =
+            DirectoryInfo::from((*exchanger.keypair().public(), fake_tob_addr));
 
         let (exit_tx, handle, _) = setup_corenode(
             next_test_ip4(),
+            CommKeyPair::random(),
             &fake_tob_info,
+            SystemConfig::new(vec!()),
             DataTree::new(),
             10,
-            vec!("0"),
+            vec!["0"],
         )
         .await;
 
@@ -518,7 +629,9 @@ mod test {
     async fn corenode_getproof() {
         init_logger();
 
-        let config = SetupConfig::setup(get_balanced_prefixes(1), DataTree::new(), 10).await;
+        let config =
+            SetupConfig::setup(get_balanced_prefixes(1), DataTree::new(), 10)
+                .await;
 
         let mut connection =
             create_peer_and_connect(&config.corenodes[0].2).await;
@@ -551,7 +664,9 @@ mod test {
     async fn request_add() {
         init_logger();
 
-        let config = SetupConfig::setup(get_balanced_prefixes(1), DataTree::new(), 10).await;
+        let config =
+            SetupConfig::setup(get_balanced_prefixes(1), DataTree::new(), 10)
+                .await;
 
         let mut c_node = create_peer_and_connect(&config.corenodes[0].2).await;
         let mut c_tob = create_peer_and_connect(&config.tob_info).await;
@@ -562,8 +677,10 @@ mod test {
             let txr = UserCoreRequest::GetProof(vec![String::from("Alan")]);
             c_node.send(&txr).await.expect("send failed");
 
-            let resp =
-                c_node.receive::<UserCoreResponse>().await.expect("recv failed");
+            let resp = c_node
+                .receive::<UserCoreResponse>()
+                .await
+                .expect("recv failed");
 
             assert_eq!(
                 resp,

@@ -12,10 +12,10 @@ use std::collections::HashSet;
 use std::hash::Hash;
 use std::sync::Arc;
 
-use tracing::{error};
+use tracing::error;
 
-use std::fmt::Debug;
 use super::Prefix;
+use std::fmt::Debug;
 
 pub struct HistoryTree<K, V>
 where
@@ -51,10 +51,7 @@ where
     K: Serialize + Clone + Eq + Hash + Debug,
     V: Serialize + Clone + Eq + Debug,
 {
-    pub fn new(
-        history_len: usize,
-        mut prefix_list: Vec<Prefix>,
-    ) -> Self {
+    pub fn new(history_len: usize, mut prefix_list: Vec<Prefix>) -> Self {
         if history_len < 1 {
             panic!("history_len must be at least 1");
         }
@@ -331,7 +328,7 @@ where
     pub fn covers(&self, key: &K) -> bool {
         let d = drop::crypto::hash(key).unwrap();
         let target = &Prefix::new(d.as_ref().to_vec(), 0);
-        
+
         for p in self.prefix_list.iter() {
             if p.includes(target) {
                 return true;
@@ -351,7 +348,7 @@ where
             // Binary search and comparison with left and right elements should work
             // but must verify first that it is theoretically correct
             // because is_close is true if there is p such that
-            // p.includes(target) OR target.includes(p) 
+            // p.includes(target) OR target.includes(p)
             // (emphasis on the second part)
             for p in prefix_list {
                 if p.includes(target) {
@@ -673,7 +670,7 @@ mod tests {
 
     #[test]
     fn push_history_2() {
-        let mut h_tree = HistoryTree::new(2, vec!(Prefix::from("01111010")));
+        let mut h_tree = HistoryTree::new(2, vec![Prefix::from("01111010")]);
 
         h_tree.insert("Bob", 1); // L, R, ...
         h_tree.add_touch(&"Bob");
@@ -749,9 +746,9 @@ mod tests {
 
     #[test]
     fn push_history_3() {
-        let mut h_tree_a = HistoryTree::new(1, vec!(Prefix::from("00")));
-        let mut h_tree_b = HistoryTree::new(1, vec!(Prefix::from("01")));
-        let mut h_tree_c = HistoryTree::new(1, vec!(Prefix::from("1")));
+        let mut h_tree_a = HistoryTree::new(1, vec![Prefix::from("00")]);
+        let mut h_tree_b = HistoryTree::new(1, vec![Prefix::from("01")]);
+        let mut h_tree_c = HistoryTree::new(1, vec![Prefix::from("1")]);
 
         let keys_existing = [
             "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",

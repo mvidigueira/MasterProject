@@ -56,10 +56,10 @@ mod test {
         let file = "contract_3/target/wasm32-unknown-unknown/release/contract_test.wasm";
         let bytes = std::fs::read(file).unwrap();
         
-        let store = get_store();
-        let module = Module::new(&store, &bytes).unwrap();
         // let module = wasmer_runtime::compile_with(&bytes, &wasmer_runtime::default_compiler()).unwrap();
         b.iter(|| {
+            let store = get_store();
+            let module = Module::new(&store, &bytes).unwrap();
             let import_object = imports! {};
             let instance = Instance::new(&module, &import_object).unwrap();
             // let instance = module.instantiate(&import_object).unwrap();
@@ -108,10 +108,10 @@ mod test {
         let file = "contract_4/target/wasm32-unknown-unknown/release/contract_test_2.wasm";
         let bytes = std::fs::read(file).unwrap();
         
-        let store = get_store();
-        let module = Module::new(&store, &bytes).unwrap();
         // let module = wasmer_runtime::compile_with(&bytes, &wasmer_runtime::default_compiler()).unwrap();
         b.iter(|| {
+            let store = get_store();
+            let module = Module::new(&store, &bytes).unwrap();
             let import_object = imports! {};
             let instance = Instance::new(&module, &import_object).unwrap();
             // let instance = module.instantiate(&import_object).unwrap();

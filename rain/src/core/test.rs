@@ -1,9 +1,13 @@
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::Arc;
+use std::collections::HashMap;
 
-use super::{CoreNode, DataTree, RuleTransaction, TobServer, Prefix, PayloadForTob};
+use super::{
+    CoreNode, DataTree, PayloadForTob, Prefix, RuleTransaction, TobServer, SystemConfig
+};
 
-use drop::crypto::key::exchange::Exchanger;
+use drop::crypto::key::exchange::{Exchanger, KeyPair as CommKeyPair};
 use drop::net::{
     Connection, Connector, DirectoryInfo, DirectoryServer, TcpConnector,
     TcpListener,
@@ -53,8 +57,9 @@ pub fn get_example_rt() -> RuleTransaction {
 pub fn get_example_tobpayload() -> PayloadForTob {
     PayloadForTob::new(
         "some rule".to_string(),
+        drop::crypto::hash(&"version + args").unwrap(),
         DataTree::new(),
-        vec!(),
+        vec![],
     )
 }
 
@@ -64,11 +69,74 @@ pub struct SetupConfig {
     pub tob_handle: JoinHandle<()>,
 
     pub corenodes: Vec<(Sender<()>, JoinHandle<()>, DirectoryInfo)>,
+    pub corenodes_config: SystemConfig<Arc<DirectoryInfo>>,
 }
 
+
+use tracing::{info};
+
 impl SetupConfig {
-    pub async fn setup<I: Into<Prefix>>(mut prefix_lists: Vec<Vec<I>>, dt: DataTree, h_len: usize) -> Self {
-        let nr_peer = prefix_lists.len();
+    pub async fn setup<I: Into<Prefix>>(
+        mut prefix_info: Vec<Vec<I>>,
+        dt: DataTree,
+        h_len: usize,
+    ) -> Self {
+        let nr_peer = prefix_info.len();
+
+        if nr_peer == 0 {
+            panic!("SetupConfig must be set up with at least 1 core node");
+        }
+
+        let tob_addr = next_test_ip4();
+        let tob_exchanger = Exchanger::random();
+        let tob_info =
+            DirectoryInfo::from((*tob_exchanger.keypair().public(), tob_addr));
+
+        let prefix_info: Vec<Vec<Prefix>> = prefix_info.drain(..).map(
+            |mut p_list| p_list.drain(..).map(|i| i.into()).collect()
+        ).collect();
+
+        let mut corenodes_info = vec!();
+        let mut kps = vec!();
+        for _ in 0..nr_peer {
+            let kp = CommKeyPair::random();
+            let address = next_test_ip4();
+            let info = DirectoryInfo::from((kp.public().clone(), address.clone()));
+
+            kps.push((address, kp));
+            corenodes_info.push(info);
+        }
+
+        let comb = corenodes_info.iter().map(|v| Arc::new(*v)).zip(prefix_info.iter().map(|p| p.clone())).collect();
+        let corenodes_config = SystemConfig::from_inverse(comb);
+
+        let corenodes = future::join_all(
+            (0..nr_peer).map(|n| {
+                setup_corenode(kps[n].0, kps[n].1.clone(), &tob_info, corenodes_config.clone(), dt.clone(), h_len, prefix_info[n].clone())
+            })
+        ).await;
+
+        // must setup tob AFTER corenodes (tob waits for corenodes to join directory)
+        let (tob_exit, tob_handle, tob_info) =
+            setup_tob(tob_addr, tob_exchanger, corenodes_info.clone()).await;
+
+        Self {
+            tob_info,
+            tob_exit,
+            tob_handle,
+
+            corenodes,
+            corenodes_config,
+        }
+    }
+
+    pub async fn setup_asymetric<I: Into<Prefix>>(
+        mut prefix_info: Vec<Vec<I>>,
+        nr_peer_tob: usize,
+        dt: DataTree,
+        h_len: usize,
+    ) -> Self {
+        let nr_peer = prefix_info.len();
 
         if nr_peer == 0 {
             panic!("SetupConfig must be setup with at least 1 core node");
@@ -77,20 +145,38 @@ impl SetupConfig {
         let tob_addr = next_test_ip4();
 
         let tob_exchanger = Exchanger::random();
-        let tob_info = DirectoryInfo::from((*tob_exchanger.keypair().public(), tob_addr));
+        let tob_info =
+            DirectoryInfo::from((*tob_exchanger.keypair().public(), tob_addr));
 
-        let corenodes = future::join_all(prefix_lists.drain(..).map(|p_list| {
-            setup_corenode(
-                next_test_ip4(),
-                &tob_info,
-                dt.clone(),
-                h_len,
-                p_list,
-            )
-        }))
-        .await;
+        let prefix_info: Vec<Vec<Prefix>> = prefix_info.drain(..).map(
+            |mut p_list| p_list.drain(..).map(|i| i.into()).collect()
+        ).collect();
 
-        let corenodes_info = corenodes.iter().map(|x| x.2).collect();
+        let mut corenodes_info = vec!();
+        let mut kps = vec!();
+        for _ in 0..nr_peer {
+            let kp = CommKeyPair::random();
+            let address = next_test_ip4();
+            let info = DirectoryInfo::from((kp.public().clone(), address.clone()));
+
+            kps.push((address, kp));
+            corenodes_info.push(info);
+        }
+
+        let comb = corenodes_info.iter().map(|v| Arc::new(*v)).zip(prefix_info.iter().map(|p| p.clone())).collect();
+        let corenodes_config = SystemConfig::from_inverse(comb);
+
+        let corenodes = future::join_all(
+            (0..nr_peer).map(|n| {
+                setup_corenode(kps[n].0, kps[n].1.clone(), &tob_info, corenodes_config.clone(), dt.clone(), h_len, prefix_info[n].clone())
+            })
+        ).await;
+
+        let corenodes_info = corenodes
+            .iter()
+            .map(|x| x.2)
+            .collect::<Vec<DirectoryInfo>>()[0..nr_peer_tob]
+            .to_vec();
 
         // must setup tob AFTER corenodes (tob waits for corenodes to join directory)
         let (tob_exit, tob_handle, tob_info) =
@@ -102,44 +188,7 @@ impl SetupConfig {
             tob_handle,
 
             corenodes,
-        }
-    }
-
-    pub async fn setup_asymetric<I: Into<Prefix>>(mut prefix_lists: Vec<Vec<I>>, nr_peer_tob: usize, dt: DataTree, h_len: usize) -> Self {
-        let nr_peer_nodes = prefix_lists.len();
-        
-        if nr_peer_nodes == 0 {
-            panic!("SetupConfig must be setup with at least 1 core node");
-        }
-
-        let tob_addr = next_test_ip4();
-
-        let tob_exchanger = Exchanger::random();
-        let tob_info = DirectoryInfo::from((*tob_exchanger.keypair().public(), tob_addr));
-
-        let corenodes = future::join_all(prefix_lists.drain(..).map(|p_list| {
-            setup_corenode(
-                next_test_ip4(),
-                &tob_info,
-                dt.clone(),
-                h_len,
-                p_list,
-            )
-        }))
-        .await;
-
-        let corenodes_info = corenodes.iter().map(|x| x.2).collect::<Vec<DirectoryInfo>>()[0..nr_peer_tob].to_vec();
-
-        // must setup tob AFTER corenodes (tob waits for corenodes to join directory)
-        let (tob_exit, tob_handle, tob_info) =
-            setup_tob(tob_addr, tob_exchanger, corenodes_info).await;
-
-        Self {
-            tob_info,
-            tob_exit,
-            tob_handle,
-
-            corenodes,
+            corenodes_config,
         }
     }
 
@@ -153,16 +202,24 @@ impl SetupConfig {
 
 pub async fn setup_corenode<I: Into<Prefix>>(
     server_addr: SocketAddr,
+    comm_kp: CommKeyPair,
     tob_info: &DirectoryInfo,
+    corenodes_info: SystemConfig<Arc<DirectoryInfo>>,
     dt: DataTree,
     h_len: usize,
-    mut prefix_list: Vec<I>,
+    mut prefix_list: Vec<I>
 ) -> (Sender<()>, JoinHandle<()>, DirectoryInfo) {
-    let (core_server, exit_tx) =
-        CoreNode::new(server_addr, tob_info, dt, h_len, 
-            prefix_list.drain(..).map(|x| x.into()).collect())
-            .await
-            .expect("core node creation failed");
+    let (core_server, exit_tx) = CoreNode::new(
+        server_addr,
+        comm_kp,
+        tob_info,
+        corenodes_info,
+        dt,
+        h_len,
+        prefix_list.drain(..).map(|x| x.into()).collect()
+    )
+    .await
+    .expect("core node creation failed");
 
     let info: DirectoryInfo =
         (core_server.public_key().clone(), server_addr).into();
@@ -201,9 +258,10 @@ pub async fn setup_tob(
     exchanger: Exchanger,
     corenodes_info: Vec<DirectoryInfo>,
 ) -> (Sender<()>, JoinHandle<()>, DirectoryInfo) {
-    let (tob_server, exit_tx) = TobServer::new(tob_addr, exchanger, corenodes_info)
-        .await
-        .expect("tob server creation failed");
+    let (tob_server, exit_tx) =
+        TobServer::new(tob_addr, exchanger, corenodes_info)
+            .await
+            .expect("tob server creation failed");
 
     let info: DirectoryInfo =
         (tob_server.public_key().clone(), tob_addr).into();
@@ -235,27 +293,27 @@ pub async fn create_peer_and_connect(target: &DirectoryInfo) -> Connection {
 }
 
 pub fn get_balanced_prefixes(n: usize) -> Vec<Vec<Prefix>> {
-    let log2 = (std::mem::size_of::<usize>() * 8) as u32 - n.leading_zeros() - 1;
-    let pow2 =  (2 as usize).pow(log2);
+    let log2 =
+        (std::mem::size_of::<usize>() * 8) as u32 - n.leading_zeros() - 1;
+    let pow2 = (2 as usize).pow(log2);
     let r = n - pow2;
-    let z = n - 2*r;
+    let z = n - 2 * r;
 
-    let mut list: Vec<Vec<Prefix>> = vec!();
-    let mut base = Prefix::new(vec!(0), 0);
+    let mut list: Vec<Vec<Prefix>> = vec![];
+    let mut base = Prefix::new(vec![0], 0);
     base.set_length_in_bits(log2 as usize);
     for _ in 0..z {
-        list.push(vec!(base.clone()));
+        list.push(vec![base.clone()]);
         base.increment();
     }
     base.set_length_in_bits(log2 as usize + 1);
-    for _ in 0..2*r {
-        list.push(vec!(base.clone()));
+    for _ in 0..2 * r {
+        list.push(vec![base.clone()]);
         base.increment();
     }
 
     list
 }
-
 
 // This function creates n/coverage groups each covering a different set of prefixes.
 // Each group is assigned at least 'coverage' different nodes at random, making it so
@@ -264,20 +322,26 @@ pub fn get_balanced_prefixes(n: usize) -> Vec<Vec<Prefix>> {
 // The 'granularity' affects the number of prefixes assigned to each shard. Higher
 // granularity tends to decrease the difference in relative size of each shard (more balanced).
 // (Recommendation: granularity >= n)
-pub fn get_prefixes_bft(n: usize, coverage: usize, granularity: usize) -> Vec<Vec<Prefix>> {
+pub fn get_prefixes_bft(
+    n: usize,
+    coverage: usize,
+    granularity: usize,
+) -> Vec<Vec<Prefix>> {
     if n < coverage {
         panic!("number of nodes must be greater or equal to coverage");
     }
 
-    let mut prefixes: Vec<Prefix> = get_balanced_prefixes(granularity).drain(..).map(|mut x| x.pop().unwrap()).collect();
+    let mut prefixes: Vec<Prefix> = get_balanced_prefixes(granularity)
+        .drain(..)
+        .map(|mut x| x.pop().unwrap())
+        .collect();
     let mut rng = rand::thread_rng();
     prefixes.shuffle(&mut rng);
 
-    let num_groups = n/coverage;
+    let num_groups = n / coverage;
 
     let mut temp_list: Vec<Vec<Prefix>> = vec![vec!(); num_groups];
-    let mut final_list: Vec<Vec<Prefix>> = vec!();
-
+    let mut final_list: Vec<Vec<Prefix>> = vec![];
 
     let mut i = 0;
     for p in prefixes {
@@ -285,7 +349,7 @@ pub fn get_prefixes_bft(n: usize, coverage: usize, granularity: usize) -> Vec<Ve
         i = (i + 1) % num_groups;
     }
 
-    let remainder = n%coverage;
+    let remainder = n % coverage;
     for i in 0..remainder {
         final_list.push(temp_list[i].clone());
     }
@@ -304,6 +368,11 @@ pub fn get_prefixes_bft(n: usize, coverage: usize, granularity: usize) -> Vec<Ve
 async fn config_setup_teardown() {
     init_logger();
 
-    let config = SetupConfig::setup(vec!(vec!("0"), vec!("0"), vec!("0"), vec!("0"), vec!("0")), DataTree::new(), 1).await;
+    let config = SetupConfig::setup(
+        vec![vec!["0"], vec!["0"], vec!["0"], vec!["0"], vec!["0"]],
+        DataTree::new(),
+        1,
+    )
+    .await;
     config.tear_down().await;
 }

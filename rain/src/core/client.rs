@@ -1,25 +1,26 @@
-use std::collections::HashMap;
+use std::borrow::Borrow;
 use std::collections::hash_map::Entry;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use drop::crypto::{key::exchange::Exchanger, Digest};
 use drop::net::{Connector, DirectoryInfo, TcpConnector};
 
 use super::{
-    history_tree::HistoryTree, DataTree, RecordID, RuleTransaction,
-    UserCoreRequest, UserCoreResponse, TobRequest, TobResponse, 
-    ExecuteResult, PayloadForTob, Touch, Prefix, prefix
+    history_tree::HistoryTree, prefix, CoreNodeInfo, DataTree, ExecuteResult,
+    PayloadForTob, Prefix, RecordID, RuleTransaction, TobRequest, TobResponse,
+    Touch, UserCoreRequest, UserCoreResponse, SystemConfig,
 };
 
 use super::{ClientError, InconsistencyError, ReplyError};
 
-use std::future::Future;
 use futures::future::{self, FutureExt};
+use std::future::Future;
 
-use tracing::{error, debug};
+use tracing::{debug, error};
 
 pub struct ClientNode {
-    prefix_list: Vec<(Prefix, Vec<Arc<DirectoryInfo>>)>,
+    corenodes_config: SystemConfig<Arc<DirectoryInfo>>,
     connector: TcpConnector,
     tob_info: DirectoryInfo,
 }
@@ -27,26 +28,12 @@ pub struct ClientNode {
 impl ClientNode {
     pub fn new(
         tob_info: &DirectoryInfo,
-        corenodes_info: Vec<DirectoryInfo>,
-        mut prefix_info: Vec<Vec<Prefix>>,
+        corenodes_config: &SystemConfig<Arc<DirectoryInfo>>,
     ) -> Result<Self, ClientError> {
-        let mut p_map = HashMap::<Prefix, Vec<Arc<DirectoryInfo>>>::new();
-
-        for (i, ps) in prefix_info.drain(..).enumerate() {
-            let c_ref = Arc::new(corenodes_info[i]);
-            for p in ps {
-                let e = p_map.entry(p).or_insert(vec!());
-                e.push(Arc::clone(&c_ref));
-            }
-        }
-
-        let mut prefix_list: Vec<(Prefix, Vec<Arc<DirectoryInfo>>)> = p_map.drain().collect();
-        prefix_list.sort_by(|x, y| x.0.cmp(&y.0)); // Order by prefix
-
         let connector = TcpConnector::new(Exchanger::random());
 
         let ret = Self {
-            prefix_list: prefix_list,
+            corenodes_config: corenodes_config.clone(),
             connector: connector,
             tob_info: tob_info.clone(),
         };
@@ -60,12 +47,13 @@ impl ClientNode {
         &self,
         records: Vec<RecordID>,
     ) -> Result<DataTree, ClientError> {
-        let mut m = prefix::assignments(&self.prefix_list, &records);
+        let mut m = self.corenodes_config.assignments(&records);
 
         let txr: &UserCoreRequest = &records.clone().into();
 
         let mut results =
-            future::join_all(m.drain().map(|(k, v)| async move {    // change joinall to tolerate non-reponding nodes
+            future::join_all(m.drain().map(|(k, v)| async move {
+                // change joinall to tolerate non-reponding nodes
                 (v, self.get_merkle_proof(&k, txr).await)
             }))
             .await;
@@ -108,7 +96,9 @@ impl ClientNode {
         records: &UserCoreRequest,
     ) -> Result<(usize, DataTree), ClientError> {
         match records {
-            UserCoreRequest::Execute(_) => panic!("'records' must be of the form &UserCoreRequest::GetProof"),
+            UserCoreRequest::Execute(_) => panic!(
+                "'records' must be of the form &UserCoreRequest::GetProof"
+            ),
             _ => (),
         }
 
@@ -131,7 +121,9 @@ impl ClientNode {
         execute: &UserCoreRequest,
     ) -> Result<ExecuteResult, ClientError> {
         match execute {
-            UserCoreRequest::GetProof(_) => panic!("'records' must be of the form &UserCoreRequest::Execute"),
+            UserCoreRequest::GetProof(_) => panic!(
+                "'records' must be of the form &UserCoreRequest::Execute"
+            ),
             _ => (),
         }
 
@@ -149,9 +141,13 @@ impl ClientNode {
     }
 
     // Collects results from corenodes until there is a majority of replies with the same result
-    async fn collect_results(futures: Vec<impl Future<Output=Result<ExecuteResult, ClientError>> + Unpin>) -> ExecuteResult {
+    async fn collect_results(
+        futures: Vec<
+            impl Future<Output = Result<ExecuteResult, ClientError>> + Unpin,
+        >,
+    ) -> ExecuteResult {
         let n = futures.len();
-        let threshold = n/2 + 1;
+        let threshold = n / 2 + 1;
 
         let mut remaining = futures;
 
@@ -193,21 +189,38 @@ impl ClientNode {
         touched_records: Vec<RecordID>,
         args: &T,
     ) -> ExecuteResult {
-        let rt = RuleTransaction::new(proof, rule.clone(), rule_version, touched_records, args);
-        let mut m = prefix::assignments(&self.prefix_list, &vec!(rule));
+        let rt = RuleTransaction::new(
+            proof,
+            rule.clone(),
+            rule_version,
+            touched_records,
+            args,
+        );
+        let mut m = self.corenodes_config.assignments(&vec![rule]);
 
         let txr: &UserCoreRequest = &UserCoreRequest::Execute(rt);
 
-        let f: Vec<_> = m.drain().map(|(k, _)| async move {
-            self.send_execution_request(&k, txr).await
-        }.boxed()).collect();
+        let f: Vec<_> = m
+            .drain()
+            .map(|(k, _)| {
+                async move { self.send_execution_request(&k, txr).await }
+                    .boxed()
+            })
+            .collect();
 
         ClientNode::collect_results(f).await
     }
 
     // Missing signatures
-    pub async fn send_apply_request(&self, rule_record_id: String, input: DataTree, result: Vec<(RecordID, Touch)>) -> Result<(), ClientError> {
-        let payload = PayloadForTob::new(rule_record_id, input, result);
+    pub async fn send_apply_request(
+        &self,
+        rule_record_id: String,
+        misc_digest: Digest,
+        input: DataTree,
+        result: Vec<(RecordID, Touch)>,
+    ) -> Result<(), ClientError> {
+        let payload =
+            PayloadForTob::new(rule_record_id, misc_digest, input, result);
         let txr = TobRequest::Apply(payload);
 
         let exchanger = Exchanger::random();
@@ -234,7 +247,7 @@ mod test {
     use std::time::Duration;
     use tokio::time::timeout;
 
-    use tracing::{trace_span, debug, info};
+    use tracing::{debug, info, trace_span};
     use tracing_futures::Instrument;
 
     #[tokio::test]
@@ -247,13 +260,19 @@ mod test {
         t.insert("Bob".to_string(), vec![1u8]);
         t.insert("Charlie".to_string(), vec![2u8]);
 
-        let config = SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 10).await;
-        let corenodes_info = config.corenodes.iter().map(|x| x.2.clone()).collect();
+        let config =
+            SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 10)
+                .await;
+
         let tob_info = &config.tob_info;
+        let corenodes_config = &config.corenodes_config;
 
         async move {
-            let client_node = ClientNode::new(tob_info, corenodes_info, get_balanced_prefixes(nr_peer))
-                .expect("client node creation failed");
+            let client_node = ClientNode::new(
+                tob_info,
+                corenodes_config,
+            )
+            .expect("client node creation failed");
 
             debug!("client node created");
 
@@ -298,21 +317,24 @@ mod test {
         t.insert("Bob".to_string(), (1000i32).to_be_bytes().to_vec());
         t.insert(rule_record_id.clone(), rule_buffer);
 
-        let config = SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 10).await;
-        let corenodes_info = config.corenodes.iter().map(|x| x.2.clone()).collect();
+        let config =
+            SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 10)
+                .await;
+        
+        let corenodes_config = &config.corenodes_config;
         let tob_info = &config.tob_info;
 
         async move {
-            let client_node = ClientNode::new(tob_info, corenodes_info, get_balanced_prefixes(nr_peer))
-                .expect("client node creation failed");
+            let client_node = ClientNode::new(
+                tob_info,
+                corenodes_config,
+            )
+            .expect("client node creation failed");
 
             debug!("client node created");
 
             let proof = client_node
-                .get_merkle_proofs(vec![
-                    "Alice".to_string(),
-                    "Bob".to_string(),
-                ])
+                .get_merkle_proofs(vec!["Alice".to_string(), "Bob".to_string()])
                 .await
                 .expect("merkle proof error");
 
@@ -322,10 +344,7 @@ mod test {
                     proof.clone(),
                     rule_record_id.clone(),
                     rule_digest,
-                    vec![
-                        "Alice".to_string(),
-                        "Bob".to_string(),
-                    ],
+                    vec!["Alice".to_string(), "Bob".to_string()],
                     &args,
                 )
                 .await;
@@ -333,8 +352,9 @@ mod test {
             client_node
                 .send_apply_request(
                     rule_record_id.clone(),
+                    res.misc_digest,
                     proof,
-                    res.output.unwrap()
+                    res.output.unwrap(),
                 )
                 .await
                 .expect("client error when sending apply request");
@@ -375,22 +395,27 @@ mod test {
         t.insert("Dave".to_string(), (1000i32).to_be_bytes().to_vec());
         t.insert(rule_record_id.clone(), rule_buffer);
 
-        let config = SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 10).await;
-        let corenodes_info: Vec<DirectoryInfo> = config.corenodes.iter().map(|x| x.2.clone()).collect();
+        let config =
+            SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 10)
+                .await;
+        let corenodes_config = &config.corenodes_config;
         let tob_info = &config.tob_info;
 
         async move {
-            let client_node_1 = ClientNode::new(tob_info, corenodes_info.clone(), get_balanced_prefixes(nr_peer))
-                .expect("client node 1 creation failed");
+            let client_node_1 = ClientNode::new(
+                tob_info,
+                corenodes_config,
+            )
+            .expect("client node 1 creation failed");
 
-            let client_node_2 = ClientNode::new(tob_info, corenodes_info, get_balanced_prefixes(nr_peer))
-                .expect("client node 2 creation failed");
+            let client_node_2 = ClientNode::new(
+                tob_info,
+                corenodes_config,
+            )
+            .expect("client node 2 creation failed");
 
             let proof_1 = client_node_1
-                .get_merkle_proofs(vec![
-                    "Alice".to_string(),
-                    "Bob".to_string(),
-                ])
+                .get_merkle_proofs(vec!["Alice".to_string(), "Bob".to_string()])
                 .await
                 .expect("merkle proof error");
 
@@ -408,18 +433,16 @@ mod test {
                     proof_1.clone(),
                     rule_record_id.clone(),
                     rule_digest,
-                    vec![
-                        "Alice".to_string(),
-                        "Bob".to_string(),
-                    ],
+                    vec!["Alice".to_string(), "Bob".to_string()],
                     &args_1,
                 )
                 .await;
             client_node_1
                 .send_apply_request(
                     rule_record_id.clone(),
+                    res.misc_digest,
                     proof_1,
-                    res.output.unwrap()
+                    res.output.unwrap(),
                 )
                 .await
                 .expect("client error when sending apply request");
@@ -430,18 +453,16 @@ mod test {
                     proof_2.clone(),
                     rule_record_id.clone(),
                     rule_digest,
-                    vec![
-                        "Charlie".to_string(),
-                        "Dave".to_string(),
-                    ],
+                    vec!["Charlie".to_string(), "Dave".to_string()],
                     &args_2,
                 )
                 .await;
             client_node_2
                 .send_apply_request(
                     rule_record_id.clone(),
+                    res.misc_digest,
                     proof_2,
-                    res.output.unwrap()
+                    res.output.unwrap(),
                 )
                 .await
                 .expect("client error when sending apply request");
@@ -487,15 +508,17 @@ mod test {
         t.insert("Bob".to_string(), (1000i32).to_be_bytes().to_vec());
         t.insert(rule_record_id.clone(), rule_buffer);
 
-        let config = SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 10).await;
-        let corenodes_info: Vec<DirectoryInfo> = config.corenodes.iter().map(|x| x.2.clone()).collect();
+        let config =
+            SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 10)
+                .await;
+        let corenodes_config = &config.corenodes_config;
         let tob_info = &config.tob_info;
 
         async move {
-            let client_node_1 = ClientNode::new(tob_info, corenodes_info.clone(), get_balanced_prefixes(nr_peer))
+            let client_node_1 = ClientNode::new(tob_info, corenodes_config)
                 .expect("client node 1 creation failed");
 
-            let client_node_2 = ClientNode::new(tob_info, corenodes_info, get_balanced_prefixes(nr_peer))
+            let client_node_2 = ClientNode::new(tob_info, corenodes_config)
                 .expect("client node 2 creation failed");
 
             let proof = client_node_1
@@ -522,6 +545,7 @@ mod test {
             client_node_1
                 .send_apply_request(
                     rule_record_id.clone(),
+                    res.misc_digest,
                     proof.clone(),
                     res.output.unwrap()
                 )
@@ -579,21 +603,21 @@ mod test {
         }
         t.insert(rule_record_id.clone(), rule_buffer);
 
-        let config = SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 2).await;
-        let corenodes_info: Vec<DirectoryInfo> = config.corenodes.iter().map(|x| x.2.clone()).collect();
+        let config =
+            SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 2)
+                .await;
+        let corenodes_config = &config.corenodes_config;
         let tob_info = &config.tob_info;
 
-        info!("Corenodes: {:?}", corenodes_info);
-
         async move {
-            let client_node_1 = ClientNode::new(tob_info, corenodes_info, get_balanced_prefixes(nr_peer))
-                .expect("client node 1 creation failed");
+            let client_node_1 = ClientNode::new(
+                tob_info,
+                corenodes_config,
+            )
+            .expect("client node 1 creation failed");
 
             let proof_1 = client_node_1
-                .get_merkle_proofs(vec![
-                    "Alice".to_string(),
-                    "Bob".to_string(),
-                ])
+                .get_merkle_proofs(vec!["Alice".to_string(), "Bob".to_string()])
                 .await
                 .expect("merkle proof error");
 
@@ -603,18 +627,16 @@ mod test {
                     proof_1.clone(),
                     rule_record_id.clone(),
                     rule_digest,
-                    vec![
-                        "Alice".to_string(),
-                        "Bob".to_string(),
-                    ],
+                    vec!["Alice".to_string(), "Bob".to_string()],
                     &args_1,
                 )
                 .await;
             client_node_1
                 .send_apply_request(
                     rule_record_id.clone(),
+                    res.misc_digest,
                     proof_1,
-                    res.output.unwrap()
+                    res.output.unwrap(),
                 )
                 .await
                 .expect("client error when sending apply request");
@@ -636,18 +658,16 @@ mod test {
                     proof_1.clone(),
                     rule_record_id.clone(),
                     rule_digest,
-                    vec![
-                        "Charlie".to_string(),
-                        "Dave".to_string(),
-                    ],
+                    vec!["Charlie".to_string(), "Dave".to_string()],
                     &args_1,
                 )
                 .await;
             client_node_1
                 .send_apply_request(
                     rule_record_id.clone(),
+                    res.misc_digest,
                     proof_1,
-                    res.output.unwrap()
+                    res.output.unwrap(),
                 )
                 .await
                 .expect("client error when sending apply request");
@@ -657,19 +677,40 @@ mod test {
 
             let result = client_node_1
                 .get_merkle_proofs(
-                    ["Alice", "Bob", "Charlie", "Dave", "Aaron", "Vanessa", "Justin", "Irina"].iter().map(|x| String::from(*x)).collect(),
+                    [
+                        "Alice", "Bob", "Charlie", "Dave", "Aaron", "Vanessa",
+                        "Justin", "Irina",
+                    ]
+                    .iter()
+                    .map(|x| String::from(*x))
+                    .collect(),
                 )
                 .await
                 .expect("merkle proof error");
 
             assert_eq!(get_i32_from_result(&"Alice".to_string(), &result), 950);
             assert_eq!(get_i32_from_result(&"Bob".to_string(), &result), 1050);
-            assert_eq!(get_i32_from_result(&"Charlie".to_string(), &result), 900);
+            assert_eq!(
+                get_i32_from_result(&"Charlie".to_string(), &result),
+                900
+            );
             assert_eq!(get_i32_from_result(&"Dave".to_string(), &result), 1100);
-            assert_eq!(get_i32_from_result(&"Aaron".to_string(), &result), 1000);
-            assert_eq!(get_i32_from_result(&"Vanessa".to_string(), &result), 1000);
-            assert_eq!(get_i32_from_result(&"Justin".to_string(), &result), 1000);
-            assert_eq!(get_i32_from_result(&"Irina".to_string(), &result), 1000);
+            assert_eq!(
+                get_i32_from_result(&"Aaron".to_string(), &result),
+                1000
+            );
+            assert_eq!(
+                get_i32_from_result(&"Vanessa".to_string(), &result),
+                1000
+            );
+            assert_eq!(
+                get_i32_from_result(&"Justin".to_string(), &result),
+                1000
+            );
+            assert_eq!(
+                get_i32_from_result(&"Irina".to_string(), &result),
+                1000
+            );
         }
         .instrument(trace_span!("test_request_in_ancient_history"))
         .await;
@@ -701,19 +742,25 @@ mod test {
         t.insert(rule_record_id.clone(), rule_buffer);
 
         // Setup a tob which only broadcasts to one of the nodes
-        let config = SetupConfig::setup_asymetric(get_balanced_prefixes(nr_peer), 1, t.clone(), 10).await;
-        let corenodes_info: Vec<DirectoryInfo> = config.corenodes.iter().map(|x| x.2.clone()).collect();
+        let config = SetupConfig::setup_asymetric(
+            get_balanced_prefixes(nr_peer),
+            1,
+            t.clone(),
+            10,
+        )
+        .await;
+        let corenodes_config = &config.corenodes_config;
         let tob_info = &config.tob_info;
 
         async move {
-            let client_node_1 = ClientNode::new(tob_info, corenodes_info, get_balanced_prefixes(nr_peer))
-                .expect("client node 1 creation failed");
+            let client_node_1 = ClientNode::new(
+                tob_info,
+                corenodes_config,
+            )
+            .expect("client node 1 creation failed");
 
             let proof_1 = client_node_1
-                .get_merkle_proofs(vec![
-                    "Alice".to_string(),
-                    "Bob".to_string(),
-                ])
+                .get_merkle_proofs(vec!["Alice".to_string(), "Bob".to_string()])
                 .await
                 .expect("merkle proof error");
 
@@ -723,10 +770,7 @@ mod test {
                     proof_1,
                     rule_record_id.clone(),
                     rule_digest,
-                    vec![
-                        "Alice".to_string(),
-                        "Bob".to_string(),
-                    ],
+                    vec!["Alice".to_string(), "Bob".to_string()],
                     &args_1,
                 )
                 .await;
@@ -748,10 +792,7 @@ mod test {
                     proof_1,
                     rule_record_id.clone(),
                     rule_digest,
-                    vec![
-                        "Charlie".to_string(),
-                        "Dave".to_string(),
-                    ],
+                    vec!["Charlie".to_string(), "Dave".to_string()],
                     &args_1,
                 )
                 .await;
@@ -773,10 +814,7 @@ mod test {
                     proof_1,
                     rule_record_id.clone(),
                     rule_digest,
-                    vec![
-                        "Aaron".to_string(),
-                        "Vanessa".to_string(),
-                    ],
+                    vec!["Aaron".to_string(), "Vanessa".to_string()],
                     &args_1,
                 )
                 .await;
@@ -798,10 +836,7 @@ mod test {
                     proof_1,
                     rule_record_id.clone(),
                     rule_digest,
-                    vec![
-                        "Justin".to_string(),
-                        "Irina".to_string(),
-                    ],
+                    vec!["Justin".to_string(), "Irina".to_string()],
                     &args_1,
                 )
                 .await;
@@ -812,7 +847,7 @@ mod test {
         config.tear_down().await;
     }
 
-    use std::time::{Instant};
+    use std::time::Instant;
 
     #[tokio::test]
     async fn merkle_proof_time() {
@@ -835,34 +870,37 @@ mod test {
         }
         t.insert(rule_record_id.clone(), rule_buffer);
 
-        let config = SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 2).await;
-        let corenodes_info: Vec<DirectoryInfo> = config.corenodes.iter().map(|x| x.2.clone()).collect();
+        let config =
+            SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 2)
+                .await;
+        let corenodes_config = &config.corenodes_config;
         let tob_info = &config.tob_info;
 
-        info!("Corenodes: {:?}", corenodes_info);
-
         async move {
-            let client_node_1 = ClientNode::new(tob_info, corenodes_info, get_balanced_prefixes(nr_peer))
-                .expect("client node 1 creation failed");
+            let client_node_1 = ClientNode::new(
+                tob_info,
+                corenodes_config,
+            )
+            .expect("client node 1 creation failed");
 
-            let mut v: Vec<Instant> = vec!(Instant::now());
+            let mut v: Vec<Instant> = vec![Instant::now()];
 
             for _ in 1i32..100i32 {
                 let _ = client_node_1
-                .get_merkle_proofs(vec![
-                    "Alice".to_string(),
-                    "Bob".to_string(),
-                    // rule_record_id.clone(),
-                ])
-                .await
-                .expect("merkle proof error");
+                    .get_merkle_proofs(vec![
+                        "Alice".to_string(),
+                        "Bob".to_string(),
+                        // rule_record_id.clone(),
+                    ])
+                    .await
+                    .expect("merkle proof error");
 
                 v.push(Instant::now());
             }
 
-            let mut vd: Vec<Duration> = vec!();
-            for i in 0..v.len()-1 {
-                vd.push(v[i+1]-v[i])
+            let mut vd: Vec<Duration> = vec![];
+            for i in 0..v.len() - 1 {
+                vd.push(v[i + 1] - v[i])
             }
 
             vd.sort();
@@ -892,13 +930,18 @@ mod test {
         }
         t.insert(rule_record_id.clone(), rule_buffer);
 
-        let config = SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 3).await;
-        let corenodes_info: Vec<DirectoryInfo> = config.corenodes.iter().map(|x| x.2.clone()).collect();
+        let config =
+            SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 3)
+                .await;
+        let corenodes_config = &config.corenodes_config;
         let tob_info = &config.tob_info;
 
         async move {
-            let client_node = ClientNode::new(tob_info, corenodes_info, get_balanced_prefixes(nr_peer))
-                .expect("client node creation failed");
+            let client_node = ClientNode::new(
+                tob_info,
+                corenodes_config,
+            )
+            .expect("client node creation failed");
 
             debug!("client node created");
 
@@ -1004,13 +1047,18 @@ mod test {
         }
         t.insert(rule_record_id.clone(), rule_buffer);
 
-        let config = SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 20).await;
-        let corenodes_info: Vec<DirectoryInfo> = config.corenodes.iter().map(|x| x.2.clone()).collect();
+        let config =
+            SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 20)
+                .await;
+        let corenodes_config = &config.corenodes_config;
         let tob_info = &config.tob_info;
 
         async move {
-            let client_node = ClientNode::new(tob_info, corenodes_info, get_balanced_prefixes(nr_peer))
-                .expect("client node creation failed");
+            let client_node = ClientNode::new(
+                tob_info,
+                corenodes_config,
+            )
+            .expect("client node creation failed");
 
             debug!("client node created");
 

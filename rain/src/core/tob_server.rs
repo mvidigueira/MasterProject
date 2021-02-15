@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use drop::crypto::key::exchange::{Exchanger, PublicKey};
 use drop::net::{
-    Connection, DirectoryInfo, Listener, ListenerError,
-    TcpConnector, TcpListener,
+    Connection, DirectoryInfo, Listener, ListenerError, TcpConnector,
+    TcpListener,
 };
 
 use super::{TobRequest, TobResponse};
@@ -47,7 +47,9 @@ impl TobServer {
 
         let sys = System::new_with_connector_zipped(
             &connector,
-            corenodes_info.drain(..).map(|info| (*info.public(), info.addr())),
+            corenodes_info
+                .drain(..)
+                .map(|info| (*info.public(), info.addr())),
         )
         .await;
 
@@ -192,9 +194,9 @@ mod test {
     use super::super::test::*;
     use super::super::{DataTree, TobRequest, TobResponse};
 
+    use drop::crypto::key::exchange::Exchanger;
     use tracing::trace_span;
     use tracing_futures::Instrument;
-    use drop::crypto::key::exchange::Exchanger;
 
     #[tokio::test]
     async fn tob_shutdown() {
@@ -202,7 +204,7 @@ mod test {
 
         let (exit_dir, handle_dir, _) = setup_dir(next_test_ip4()).await;
         let (exit_tob, handle_tob, _) =
-            setup_tob(next_test_ip4(), Exchanger::random(), vec!()).await;
+            setup_tob(next_test_ip4(), Exchanger::random(), vec![]).await;
 
         wait_for_server(exit_tob, handle_tob).await;
         wait_for_server(exit_dir, handle_dir).await;
@@ -212,7 +214,9 @@ mod test {
     async fn tob_forwarding() {
         init_logger();
 
-        let config = SetupConfig::setup(get_balanced_prefixes(1), DataTree::new(), 10).await;
+        let config =
+            SetupConfig::setup(get_balanced_prefixes(1), DataTree::new(), 10)
+                .await;
 
         let mut connection = create_peer_and_connect(&config.tob_info).await;
 
