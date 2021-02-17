@@ -1,10 +1,12 @@
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
-use std::collections::HashMap;
+
+use super::{BlsSignature, BlsSigKey, BlsSigInfo, BlsKeypair, BlsParams};
+use rand::thread_rng;
 
 use super::{
-    CoreNode, DataTree, PayloadForTob, Prefix, RuleTransaction, TobServer, SystemConfig
+    CoreNode, CoreNodeInfo, DataTree, PayloadForTob, Prefix, RuleTransaction, TobServer, SystemConfig
 };
 
 use drop::crypto::key::exchange::{Exchanger, KeyPair as CommKeyPair};
@@ -63,17 +65,19 @@ pub fn get_example_tobpayload() -> PayloadForTob {
     )
 }
 
+pub fn get_example_bls_sig_info() -> BlsSigInfo {
+    let sig = BlsSignature::new(&vec!(), &BlsSigKey::new(&mut thread_rng()));
+    BlsSigInfo::new(sig, vec!())
+}
+
 pub struct SetupConfig {
     pub tob_info: DirectoryInfo,
     pub tob_exit: Sender<()>,
     pub tob_handle: JoinHandle<()>,
 
     pub corenodes: Vec<(Sender<()>, JoinHandle<()>, DirectoryInfo)>,
-    pub corenodes_config: SystemConfig<Arc<DirectoryInfo>>,
+    pub corenodes_config: SystemConfig<Arc<CoreNodeInfo>>,
 }
-
-
-use tracing::{info};
 
 impl SetupConfig {
     pub async fn setup<I: Into<Prefix>>(
@@ -99,26 +103,33 @@ impl SetupConfig {
         let mut corenodes_info = vec!();
         let mut kps = vec!();
         for _ in 0..nr_peer {
-            let kp = CommKeyPair::random();
+            let comm_kp = CommKeyPair::random();
             let address = next_test_ip4();
-            let info = DirectoryInfo::from((kp.public().clone(), address.clone()));
+            let params = BlsParams::new("some publicly known string".as_bytes());
+            let mut rng = thread_rng();
+            let bls_kp = BlsKeypair::new(&mut rng, &params);
 
-            kps.push((address, kp));
+            let info = DirectoryInfo::from((comm_kp.public().clone(), address.clone()));
+            let info = CoreNodeInfo::new(info, bls_kp.ver_key.clone());
             corenodes_info.push(info);
+
+            kps.push((address, comm_kp, bls_kp));
         }
 
-        let comb = corenodes_info.iter().map(|v| Arc::new(*v)).zip(prefix_info.iter().map(|p| p.clone())).collect();
+        let comb = corenodes_info.iter().map(|v| Arc::new(v.clone())).zip(prefix_info.iter().map(|p| p.clone())).collect();
         let corenodes_config = SystemConfig::from_inverse(comb);
 
         let corenodes = future::join_all(
-            (0..nr_peer).map(|n| {
-                setup_corenode(kps[n].0, kps[n].1.clone(), &tob_info, corenodes_config.clone(), dt.clone(), h_len, prefix_info[n].clone())
-            })
+            kps.drain(..).enumerate().map(
+                |(i, (a,b,c))| {
+                    setup_corenode(a, b, c, &tob_info, corenodes_config.clone(), dt.clone(), h_len, prefix_info[i].clone())
+                }
+            )
         ).await;
 
         // must setup tob AFTER corenodes (tob waits for corenodes to join directory)
         let (tob_exit, tob_handle, tob_info) =
-            setup_tob(tob_addr, tob_exchanger, corenodes_info.clone()).await;
+            setup_tob(tob_addr, tob_exchanger, corenodes_info.iter().map(|x| x.dir_info().clone()).collect()).await;
 
         Self {
             tob_info,
@@ -139,11 +150,10 @@ impl SetupConfig {
         let nr_peer = prefix_info.len();
 
         if nr_peer == 0 {
-            panic!("SetupConfig must be setup with at least 1 core node");
+            panic!("SetupConfig must be set up with at least 1 core node");
         }
 
         let tob_addr = next_test_ip4();
-
         let tob_exchanger = Exchanger::random();
         let tob_info =
             DirectoryInfo::from((*tob_exchanger.keypair().public(), tob_addr));
@@ -155,21 +165,28 @@ impl SetupConfig {
         let mut corenodes_info = vec!();
         let mut kps = vec!();
         for _ in 0..nr_peer {
-            let kp = CommKeyPair::random();
+            let comm_kp = CommKeyPair::random();
             let address = next_test_ip4();
-            let info = DirectoryInfo::from((kp.public().clone(), address.clone()));
+            let params = BlsParams::new("some publicly known string".as_bytes());
+            let mut rng = thread_rng();
+            let bls_kp = BlsKeypair::new(&mut rng, &params);
 
-            kps.push((address, kp));
+            let info = DirectoryInfo::from((comm_kp.public().clone(), address.clone()));
+            let info = CoreNodeInfo::new(info, bls_kp.ver_key.clone());
             corenodes_info.push(info);
+
+            kps.push((address, comm_kp, bls_kp));
         }
 
-        let comb = corenodes_info.iter().map(|v| Arc::new(*v)).zip(prefix_info.iter().map(|p| p.clone())).collect();
+        let comb = corenodes_info.iter().map(|v| Arc::new(v.clone())).zip(prefix_info.iter().map(|p| p.clone())).collect();
         let corenodes_config = SystemConfig::from_inverse(comb);
 
         let corenodes = future::join_all(
-            (0..nr_peer).map(|n| {
-                setup_corenode(kps[n].0, kps[n].1.clone(), &tob_info, corenodes_config.clone(), dt.clone(), h_len, prefix_info[n].clone())
-            })
+            kps.drain(..).enumerate().map(
+                |(i, (a,b,c))| {
+                    setup_corenode(a, b, c, &tob_info, corenodes_config.clone(), dt.clone(), h_len, prefix_info[i].clone())
+                }
+            )
         ).await;
 
         let corenodes_info = corenodes
@@ -203,8 +220,9 @@ impl SetupConfig {
 pub async fn setup_corenode<I: Into<Prefix>>(
     server_addr: SocketAddr,
     comm_kp: CommKeyPair,
+    bls_kp: BlsKeypair,
     tob_info: &DirectoryInfo,
-    corenodes_info: SystemConfig<Arc<DirectoryInfo>>,
+    corenodes_info: SystemConfig<Arc<CoreNodeInfo>>,
     dt: DataTree,
     h_len: usize,
     mut prefix_list: Vec<I>
@@ -212,6 +230,7 @@ pub async fn setup_corenode<I: Into<Prefix>>(
     let (core_server, exit_tx) = CoreNode::new(
         server_addr,
         comm_kp,
+        bls_kp,
         tob_info,
         corenodes_info,
         dt,

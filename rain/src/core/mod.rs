@@ -26,11 +26,13 @@ use drop::crypto::Digest;
 use drop::error::Error;
 use drop::net::{ConnectError, ListenerError, ReceiveError, SendError};
 
-use bls_amcl::common::{Keypair, Params, SigKey, VerKey};
-use bls_amcl::multi_sig_fast::{AggregatedVerKeyFast, MultiSignatureFast};
-use bls_amcl::simple::Signature;
+use bls_amcl::common::{Keypair as BlsKeypair, Params as BlsParams, SigKey as BlsSigKey, VerKey as BlsVerKey};
+use bls_amcl::multi_sig_fast::{AggregatedVerKeyFast as BlsVerifySignatures, MultiSignatureFast as BlsAggregateSignatures};
+use bls_amcl::simple::Signature as BlsSignature;
 
 use merkle::{error::MerkleError, Tree};
+
+use std::convert::TryFrom;
 
 use macros::error;
 extern crate bincode;
@@ -92,12 +94,55 @@ unsafe impl Send for UserCoreRequest {}
 unsafe impl Sync for UserCoreRequest {}
 impl classic::Message for UserCoreRequest {}
 
+use std::hash::{Hash, Hasher};
+
+#[derive(classic::Serialize, classic::Deserialize, Debug, Clone, PartialEq)]
+struct BlsSigWrapper (BlsSignature);
+impl Eq for BlsSigWrapper {}
+impl Hash for BlsSigWrapper {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.to_bytes().hash(state);
+    }
+}
+impl From<BlsSignature> for BlsSigWrapper {
+    fn from(sig: BlsSignature) -> Self {
+        BlsSigWrapper(sig)
+    }
+}
+impl From<BlsSigWrapper> for BlsSignature {
+    fn from(wrapper: BlsSigWrapper) -> Self {
+        wrapper.0
+    }
+}
+
+#[derive(classic::Serialize, classic::Deserialize, Debug, Clone, PartialEq)]
+pub struct BlsSigInfo {
+    sig: BlsSignature,
+    mask: Vec<bool>,
+}
+impl Eq for BlsSigInfo {}
+impl Hash for BlsSigInfo {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.sig.to_bytes().hash(state);
+        self.mask.hash(state);
+    }
+}
+impl BlsSigInfo {
+    pub fn new(sig: BlsSignature, mask: Vec<bool>) -> Self {
+        Self {
+            sig,
+            mask
+        }
+    }
+}
+
+
 #[derive(
     classic::Serialize, classic::Deserialize, Debug, Clone, Hash, PartialEq, Eq,
 )]
 enum UserCoreResponse {
     GetProof((usize, Tree<RecordID, RecordVal>)),
-    Execute(ExecuteResult),
+    Execute((ExecuteResult, BlsSigWrapper)),
 }
 
 unsafe impl Send for UserCoreResponse {}
@@ -191,7 +236,7 @@ impl RuleTransaction {
     classic::Serialize, classic::Deserialize, Debug, Clone, Hash, PartialEq, Eq,
 )]
 pub enum TobRequest {
-    Apply(PayloadForTob),
+    Apply((PayloadForTob, BlsSigInfo)),
 }
 
 unsafe impl Send for TobRequest {}
@@ -211,7 +256,7 @@ pub struct PayloadForTob {
 impl PayloadForTob {
     pub fn new(
         rule_record_id: String,
-        misc_digest: Digest, // hash(rule_version, args)
+        misc_digest: Digest,
         input_merkle_proof: DataTree,
         output: Vec<(RecordID, Touch)>,
     ) -> Self {

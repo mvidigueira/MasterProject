@@ -1,4 +1,3 @@
-use std::borrow::Borrow;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -6,9 +5,11 @@ use std::sync::Arc;
 use drop::crypto::{key::exchange::Exchanger, Digest};
 use drop::net::{Connector, DirectoryInfo, TcpConnector};
 
+use super::{BlsSignature, BlsAggregateSignatures, BlsSigInfo};
+
 use super::{
-    history_tree::HistoryTree, prefix, CoreNodeInfo, DataTree, ExecuteResult,
-    PayloadForTob, Prefix, RecordID, RuleTransaction, TobRequest, TobResponse,
+    history_tree::HistoryTree, CoreNodeInfo, DataTree, ExecuteResult,
+    PayloadForTob, RecordID, RuleTransaction, TobRequest, TobResponse,
     Touch, UserCoreRequest, UserCoreResponse, SystemConfig,
 };
 
@@ -20,7 +21,7 @@ use std::future::Future;
 use tracing::{debug, error};
 
 pub struct ClientNode {
-    corenodes_config: SystemConfig<Arc<DirectoryInfo>>,
+    corenodes_config: SystemConfig<Arc<CoreNodeInfo>>,
     connector: TcpConnector,
     tob_info: DirectoryInfo,
 }
@@ -28,7 +29,7 @@ pub struct ClientNode {
 impl ClientNode {
     pub fn new(
         tob_info: &DirectoryInfo,
-        corenodes_config: &SystemConfig<Arc<DirectoryInfo>>,
+        corenodes_config: &SystemConfig<Arc<CoreNodeInfo>>,
     ) -> Result<Self, ClientError> {
         let connector = TcpConnector::new(Exchanger::random());
 
@@ -54,7 +55,7 @@ impl ClientNode {
         let mut results =
             future::join_all(m.drain().map(|(k, v)| async move {
                 // change joinall to tolerate non-reponding nodes
-                (v, self.get_merkle_proof(&k, txr).await)
+                (v, self.get_merkle_proof(k.dir_info(), txr).await)
             }))
             .await;
 
@@ -119,7 +120,7 @@ impl ClientNode {
         &self,
         corenode_info: &DirectoryInfo,
         execute: &UserCoreRequest,
-    ) -> Result<ExecuteResult, ClientError> {
+    ) -> Result<(ExecuteResult, BlsSignature), ClientError> {
         match execute {
             UserCoreRequest::GetProof(_) => panic!(
                 "'records' must be of the form &UserCoreRequest::Execute"
@@ -135,43 +136,63 @@ impl ClientNode {
         connection.send(execute).await?;
         let resp = connection.receive::<UserCoreResponse>().await?;
         match resp {
-            UserCoreResponse::Execute(result) => Ok(result),
-            _ => return Err(ReplyError::new().into()),
+            UserCoreResponse::Execute((result, sig)) => {
+                // TODO: verify signature here using CoreNodeInfo
+                Ok((result, sig.0))
+            }
+            _ => Err(ReplyError::new().into()),
         }
+    }
+
+    fn create_mask(nums: Vec<usize>, len: usize) -> Vec<bool> {
+        let mut mask = vec![false; len];
+        for i in nums {
+            mask[i] = true;
+        }
+        mask
     }
 
     // Collects results from corenodes until there is a majority of replies with the same result
     async fn collect_results(
         futures: Vec<
-            impl Future<Output = Result<ExecuteResult, ClientError>> + Unpin,
+            impl Future<Output = (usize, Result<(ExecuteResult, BlsSignature), ClientError>)> + Unpin,
         >,
-    ) -> ExecuteResult {
+    ) -> (ExecuteResult, BlsSigInfo) {
         let n = futures.len();
         let threshold = n / 2 + 1;
 
         let mut remaining = futures;
 
-        let mut counts: HashMap<ExecuteResult, usize> = HashMap::new();
+        let mut counts: HashMap<ExecuteResult, Vec<(usize, BlsSignature)>> = HashMap::new();
 
         loop {
             let ret = future::select_all(remaining).await;
-            let r = ret.0;
+            let (i, r) = ret.0;
             remaining = ret.2;
 
             if let Ok(r) = r {
-                match counts.entry(r) {
+                match counts.entry(r.0) {
                     Entry::Vacant(entry) => {
                         if threshold == 1 {
-                            return entry.into_key();
+                            let sig = BlsAggregateSignatures::from_sigs(vec![&r.1]);
+                            let mask = Self::create_mask(vec!(i), n);
+                            return (entry.into_key(), BlsSigInfo::new(sig, mask));
                         } else {
-                            entry.insert(1);
+                            entry.insert(vec!((i, r.1)));
                         }
                     }
                     Entry::Occupied(mut entry) => {
-                        if entry.get() + 1 == threshold {
-                            return entry.remove_entry().0;
+                        if entry.get().len() + 1 == threshold {
+                            let mut e = entry.remove_entry();
+                            e.1.push((i, r.1));
+
+                            let (nums, sigs): (Vec<usize>, Vec<BlsSignature>) = e.1.drain(..).unzip();
+                            let sig = BlsAggregateSignatures::from_sigs(sigs.iter().collect());
+                            let mask = Self::create_mask(nums, n);
+
+                            return (e.0, BlsSigInfo::new(sig, mask));
                         } else {
-                            *entry.get_mut() += 1;
+                            entry.get_mut().push((i, r.1));
                         }
                     }
                 }
@@ -188,7 +209,7 @@ impl ClientNode {
         rule_version: Digest,
         touched_records: Vec<RecordID>,
         args: &T,
-    ) -> ExecuteResult {
+    ) -> (ExecuteResult, BlsSigInfo) {
         let rt = RuleTransaction::new(
             proof,
             rule.clone(),
@@ -196,14 +217,16 @@ impl ClientNode {
             touched_records,
             args,
         );
-        let mut m = self.corenodes_config.assignments(&vec![rule]);
+        let mut m = self.corenodes_config.get_group_covering(&rule);
+        m.sort_by(|x, y| x.dir_info().public().cmp(&y.dir_info().public()));
 
         let txr: &UserCoreRequest = &UserCoreRequest::Execute(rt);
 
         let f: Vec<_> = m
-            .drain()
-            .map(|(k, _)| {
-                async move { self.send_execution_request(&k, txr).await }
+            .drain(..)
+            .enumerate()
+            .map(|(i, k)| {
+                async move { (i, self.send_execution_request(k.dir_info(), txr).await) }
                     .boxed()
             })
             .collect();
@@ -218,10 +241,11 @@ impl ClientNode {
         misc_digest: Digest,
         input: DataTree,
         result: Vec<(RecordID, Touch)>,
+        bls_signature: BlsSigInfo,
     ) -> Result<(), ClientError> {
         let payload =
             PayloadForTob::new(rule_record_id, misc_digest, input, result);
-        let txr = TobRequest::Apply(payload);
+        let txr = TobRequest::Apply((payload, bls_signature));
 
         let exchanger = Exchanger::random();
         let connector = TcpConnector::new(exchanger);
@@ -339,7 +363,7 @@ mod test {
                 .expect("merkle proof error");
 
             let args = ("Alice".to_string(), "Bob".to_string(), 50i32);
-            let res = client_node
+            let (res, bls_sig) = client_node
                 .send_execution_requests(
                     proof.clone(),
                     rule_record_id.clone(),
@@ -355,6 +379,7 @@ mod test {
                     res.misc_digest,
                     proof,
                     res.output.unwrap(),
+                    bls_sig,
                 )
                 .await
                 .expect("client error when sending apply request");
@@ -428,7 +453,7 @@ mod test {
                 .expect("merkle proof error");
 
             let args_1 = ("Alice".to_string(), "Bob".to_string(), 50i32);
-            let res = client_node_1
+            let (res, bls_sig) = client_node_1
                 .send_execution_requests(
                     proof_1.clone(),
                     rule_record_id.clone(),
@@ -443,12 +468,13 @@ mod test {
                     res.misc_digest,
                     proof_1,
                     res.output.unwrap(),
+                    bls_sig,
                 )
                 .await
                 .expect("client error when sending apply request");
 
             let args_2 = ("Charlie".to_string(), "Dave".to_string(), 50i32);
-            let res = client_node_2
+            let (res, bls_sig) = client_node_2
                 .send_execution_requests(
                     proof_2.clone(),
                     rule_record_id.clone(),
@@ -463,6 +489,7 @@ mod test {
                     res.misc_digest,
                     proof_2,
                     res.output.unwrap(),
+                    bls_sig,
                 )
                 .await
                 .expect("client error when sending apply request");
@@ -530,7 +557,7 @@ mod test {
                 .expect("merkle proof error");
 
             let args_1 = ("Alice".to_string(), "Bob".to_string(), 50i32);
-            let res = client_node_1
+            let (res, bls_sig) = client_node_1
                 .send_execution_requests(
                     proof.clone(),
                     rule_record_id.clone(),
@@ -547,13 +574,14 @@ mod test {
                     rule_record_id.clone(),
                     res.misc_digest,
                     proof.clone(),
-                    res.output.unwrap()
+                    res.output.unwrap(),
+                    bls_sig,
                 )
                 .await
                 .expect("client error when sending apply request");
 
             let args_2 = ("Charlie".to_string(), "Dave".to_string(), 50i32);
-            let res = client_node_2
+            let (res, bls_sig) = client_node_2
                 .send_execution_requests(
                     proof.clone(),
                     rule_record_id.clone(),
@@ -622,7 +650,7 @@ mod test {
                 .expect("merkle proof error");
 
             let args_1 = ("Alice".to_string(), "Bob".to_string(), 50i32);
-            let res = client_node_1
+            let (res, bls_sig) = client_node_1
                 .send_execution_requests(
                     proof_1.clone(),
                     rule_record_id.clone(),
@@ -637,6 +665,7 @@ mod test {
                     res.misc_digest,
                     proof_1,
                     res.output.unwrap(),
+                    bls_sig
                 )
                 .await
                 .expect("client error when sending apply request");
@@ -653,7 +682,7 @@ mod test {
                 .expect("merkle proof error");
 
             let args_1 = ("Charlie".to_string(), "Dave".to_string(), 100i32);
-            let res = client_node_1
+            let (res, bls_sig) = client_node_1
                 .send_execution_requests(
                     proof_1.clone(),
                     rule_record_id.clone(),
@@ -668,6 +697,7 @@ mod test {
                     res.misc_digest,
                     proof_1,
                     res.output.unwrap(),
+                    bls_sig,
                 )
                 .await
                 .expect("client error when sending apply request");

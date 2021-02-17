@@ -1,9 +1,7 @@
-use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use bls_amcl::common::{Params, SigKey, VerKey};
-use bls_amcl::common::Keypair as BlsKeypair;
+use super::{BlsKeypair, BlsParams, BlsSigKey, BlsVerKey, BlsSignature, BlsSigWrapper, BlsSigInfo, BlsVerifySignatures};
 
 use drop::crypto::{
     key::exchange::{Exchanger, PublicKey, KeyPair as CommKeyPair},
@@ -18,7 +16,7 @@ use std::hash::{Hash, Hasher};
 
 use super::{
     memory_usage::MemoryReport, CoreNodeError, DataTree, ExecuteResult, HTree,
-    ModuleCache, Prefix, RecordID, RuleTransaction, TobRequest, TobResponse,
+    ModuleCache, Prefix, RecordID, RuleTransaction, PayloadForTob, TobRequest, TobResponse,
     Touch, UserCoreRequest, UserCoreResponse, SystemConfig
 };
 use wasm_common_bindings::Ledger;
@@ -37,11 +35,12 @@ const RECORD_LIMIT: usize = 400;
 
 type ProtectedTree = Arc<RwLock<HTree>>;
 type ProtectedModuleCache = Arc<RwLock<ModuleCache>>;
+type ProtectedConfig = Arc<SystemConfig<Arc<Info>>>;
 
 #[derive(Clone, PartialEq)]
 pub struct Info {
     dir_info: DirectoryInfo,
-    bls_pkey: VerKey,
+    bls_pkey: BlsVerKey,
 }
 impl Eq for Info {}
 impl Hash for Info {
@@ -51,8 +50,16 @@ impl Hash for Info {
     }
 }
 impl Info {
+    /// Create a new 'Info' from a 'DirectoryInfo' and a bls public key
+    pub fn new(dir_info: DirectoryInfo, bls_pkey: BlsVerKey) -> Self {
+        Self {
+            dir_info,
+            bls_pkey,
+        }
+    }
+
     /// Get the `DirectoryInfo` contained in this `Info`
-    pub fn bls_public(&self) -> &VerKey {
+    pub fn bls_public(&self) -> &BlsVerKey {
         &self.bls_pkey
     }
 
@@ -72,17 +79,17 @@ pub struct CoreNode {
     data: ProtectedTree,
     module_cache: ProtectedModuleCache,
 
-    corenodes_config: SystemConfig<Arc<DirectoryInfo>>,
+    corenodes_config: ProtectedConfig,
 }
 
 impl CoreNode {
     pub async fn new(
         node_addr: SocketAddr,
         comm_kp: CommKeyPair,
-        // bls_kp: BlsKeypair,
+        bls_kp: BlsKeypair,
 
         tob_info: &DirectoryInfo,
-        corenodes_config: SystemConfig<Arc<DirectoryInfo>>,
+        corenodes_config: SystemConfig<Arc<Info>>,
 
         dt: DataTree,
         history_len: usize,
@@ -104,10 +111,6 @@ impl CoreNode {
         }
         h_tree.push_history();
 
-        let params = Params::new("some publicly known string".as_bytes());
-        let mut rng = thread_rng();
-        let bls_kp = BlsKeypair::new(&mut rng, &params);
-
         let ret = (
             Self {
                 listener: listener,
@@ -119,7 +122,7 @@ impl CoreNode {
                 data: Arc::from(RwLock::new(h_tree)),
                 module_cache: Arc::from(RwLock::new(ModuleCache::new())),
 
-                corenodes_config: corenodes_config,
+                corenodes_config: Arc::new(corenodes_config),
             },
             tx,
         );
@@ -153,10 +156,12 @@ impl CoreNode {
 
             let peer_pub = connection.remote_key();
             let data = self.data.clone();
+            let config = self.corenodes_config.clone();
             if peer_pub != Some(self.tob_pub_key) {
                 info!("CLIENT connection {:?}", peer_pub);
 
                 let module_cache = self.module_cache.clone();
+                let bls_sk = self.bls_kp.sig_key.clone();
 
                 task::spawn(
                     async move {
@@ -164,6 +169,7 @@ impl CoreNode {
                             connection,
                             data,
                             module_cache,
+                            bls_sk,
                         );
 
                         if let Err(_) = client_handler.serve().await {
@@ -178,7 +184,7 @@ impl CoreNode {
                 task::spawn(
                     async move {
                         let request_handler =
-                            TobRequestHandler::new(connection, data);
+                            TobRequestHandler::new(config, connection, data);
 
                         if let Err(_) = request_handler.serve().await {
                             error!("failed request handling");
@@ -228,6 +234,7 @@ struct ClientRequestHandler {
     connection: Connection,
     data: ProtectedTree,
     module_cache: ProtectedModuleCache,
+    bls_sk: BlsSigKey,
 }
 
 impl ClientRequestHandler {
@@ -235,11 +242,13 @@ impl ClientRequestHandler {
         connection: Connection,
         data: ProtectedTree,
         module_cache: ProtectedModuleCache,
+        bls_sk: BlsSigKey,
     ) -> Self {
         Self {
             connection,
             data,
             module_cache,
+            bls_sk,
         }
     }
 
@@ -488,6 +497,8 @@ impl ClientRequestHandler {
                         rt.rule_record_id
                     );
 
+                    let proof = rt.merkle_proof.clone();
+
                     let result = Self::handle_execute(
                         &mut self.data,
                         &mut self.module_cache,
@@ -500,8 +511,17 @@ impl ClientRequestHandler {
                         result
                     );
 
+                    let d = if let Ok(output) = result.output.clone() {
+                        let p = PayloadForTob::new(result.rule_record_id.clone(), result.misc_digest.clone(), proof, output);
+                        drop::crypto::hash(&p).unwrap()
+                    } else {
+                        drop::crypto::hash(&result).unwrap()
+                    };
+
+                    let bls_signature = BlsSignature::new(d.as_ref(), &self.bls_sk);
+
                     self.connection
-                        .send(&UserCoreResponse::Execute(result))
+                        .send(&UserCoreResponse::Execute((result, bls_signature.into())))
                         .await?;
                 }
             }
@@ -516,23 +536,40 @@ impl ClientRequestHandler {
 }
 
 struct TobRequestHandler {
+    config: ProtectedConfig,
     connection: Connection,
     data: ProtectedTree,
 }
 
 impl TobRequestHandler {
-    fn new(connection: Connection, data: ProtectedTree) -> Self {
-        Self { connection, data }
+    fn new(config: ProtectedConfig, connection: Connection, data: ProtectedTree) -> Self {
+        Self { config, connection, data }
+    }
+
+    fn validate_sigs(&self, payload: &PayloadForTob, sig_info: &BlsSigInfo) -> bool {
+        let mut nodes = self.config.get_group_covering(&payload.rule_record_id);
+        nodes.sort_by(|x, y| x.dir_info().public().cmp(&y.dir_info().public()));
+        let ver_keys: Vec<&BlsVerKey> = nodes.drain(..).enumerate().filter(|(i,_)| sig_info.mask[*i] == true).map(|(_, k)| k.bls_public()).collect();
+        let pk = BlsVerifySignatures::from_verkeys(ver_keys);
+
+        let params = BlsParams::new("some publicly known string".as_bytes());
+        let d = drop::crypto::hash(payload).unwrap();
+
+        sig_info.sig.verify(d.as_ref(), &pk, &params)
     }
 
     async fn serve(mut self) -> Result<(), CoreNodeError> {
         while let Ok(txr) = self.connection.receive::<TobRequest>().await {
             match txr {
-                TobRequest::Apply(mut req) => {
+                TobRequest::Apply((mut req, sig)) => {
+                    if !self.validate_sigs(&req, &sig) {
+                        let cause = format!("Error processing transaction: invalid signatures");
+                        error!("{}", cause);
+                        continue;
+                    }
+
                     let touched_records =
                         req.output.iter().map(|x| x.0.clone()).collect();
-
-                    // TODO: receive and validate signatures here
 
                     let mut tree_guard = self.data.write().await;
 
@@ -611,9 +648,14 @@ mod test {
         let fake_tob_info =
             DirectoryInfo::from((*exchanger.keypair().public(), fake_tob_addr));
 
+        let params = BlsParams::new("some publicly known string".as_bytes());
+        let mut rng = thread_rng();
+        let bls_kp = BlsKeypair::new(&mut rng, &params);
+
         let (exit_tx, handle, _) = setup_corenode(
             next_test_ip4(),
             CommKeyPair::random(),
+            bls_kp,
             &fake_tob_info,
             SystemConfig::new(vec!()),
             DataTree::new(),
@@ -688,7 +730,7 @@ mod test {
                 "invalid response from corenode"
             );
 
-            let txr = TobRequest::Apply(get_example_tobpayload());
+            let txr = TobRequest::Apply((get_example_tobpayload(), get_example_bls_sig_info()));
             c_tob.send(&txr).await.expect("send failed");
 
             let resp =
