@@ -16,7 +16,7 @@ use std::hash::{Hash, Hasher};
 
 use super::{
     memory_usage::MemoryReport, CoreNodeError, DataTree, ExecuteResult, HTree,
-    ModuleCache, Prefix, RecordID, RuleTransaction, PayloadForTob, TobRequest, TobResponse,
+    ModuleCache, Prefix, RecordID, RuleTransaction, PayloadForTob, TobRequest,
     Touch, UserCoreRequest, UserCoreResponse, SystemConfig
 };
 use wasm_common_bindings::Ledger;
