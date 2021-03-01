@@ -2,10 +2,9 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
 
-use super::{BlsSignature, BlsSigKey, BlsSigInfo, BlsKeypair, BlsParams};
-use rand::thread_rng;
-
+use rand::{thread_rng, prelude::SliceRandom};
 use super::{
+    BlsSignature, BlsSigKey, BlsSigInfo, BlsKeypair, BlsParams,
     CoreNode, CoreNodeInfo, DataTree, PayloadForTob, Prefix, RuleTransaction, SystemConfig
 };
 
@@ -25,8 +24,6 @@ use tracing_futures::Instrument;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 use futures::future;
-
-use rand::prelude::SliceRandom;
 
 static PORT_OFFSET: AtomicU16 = AtomicU16::new(0);
 

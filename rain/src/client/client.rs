@@ -5,12 +5,10 @@ use std::sync::Arc;
 use drop::crypto::{key::exchange::Exchanger, Digest};
 use drop::net::{Connector, DirectoryInfo, TcpConnector};
 
-use crate::core::{BlsSignature, BlsAggregateSignatures, BlsSigInfo};
-
-use crate::core::{
+use crate::corenode::{
     HistoryTree, CoreNodeInfo, DataTree, ExecuteResult,
     PayloadForTob, RecordID, RuleTransaction, TobRequest, TobResponse,
-    Touch, UserCoreRequest, UserCoreResponse, SystemConfig,
+    Touch, UserCoreRequest, UserCoreResponse, SystemConfig, BlsSignature, BlsAggregateSignatures, BlsSigInfo
 };
 
 use super::{ClientError, InconsistencyError, ReplyError};
@@ -268,7 +266,7 @@ impl ClientNode {
 mod test {
     use super::*;
 
-    use crate::core::test::*;
+    use crate::corenode::test::*;
     use super::DataTree;
 
     use std::time::Duration;

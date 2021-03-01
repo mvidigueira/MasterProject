@@ -1,5 +1,11 @@
-use super::HTree;
+// use super::HTree;
+use crate::corenode::HistoryTree;
 use merkle::MerkleError;
+
+use std::hash::Hash;
+use serde::Serialize;
+use std::fmt::Debug;
+
 use drop::crypto::Digest;
 use std::collections::{hash_map::Entry, HashMap};
 
@@ -44,11 +50,13 @@ pub enum ModuleCacheError {
     InstancingError,
 }
 
-pub struct ModuleCache {
-    map: HashMap<String, (Module, Digest)>,
+pub struct ModuleCache<K> {
+    map: HashMap<K, (Module, Digest)>,
 }
 
-impl ModuleCache {
+impl<K> ModuleCache<K>
+where K: Serialize + Clone + Eq + Hash + Debug {
+    
     pub fn new() -> Self {
         ModuleCache {
             map: HashMap::new(),
@@ -57,9 +65,9 @@ impl ModuleCache {
 
     pub fn get_instance(
         &mut self,
-        id: &String,
+        id: &K,
         hash: &Digest,
-        h_tree: &HTree,
+        h_tree: &HistoryTree<K, Vec<u8>>,
     ) -> Result<Instance, ModuleCacheError> {
         let module = self.load(id, hash, h_tree)?;
 
@@ -75,9 +83,9 @@ impl ModuleCache {
 
     pub fn load(
         &mut self,
-        id: &String,
+        id: &K,
         hash: &Digest,
-        h_tree: &HTree,
+        h_tree: &HistoryTree<K, Vec<u8>>,
     ) -> Result<&Module, ModuleCacheError> {
         if !h_tree.covers(id) {
             return Err(ModuleCacheError::NotResponsible);
@@ -129,8 +137,8 @@ impl ModuleCache {
 
     pub fn try_caching(
         &mut self,
-        id: &String,
-        h_tree: &HTree,
+        id: &K,
+        h_tree: &HistoryTree<K, Vec<u8>>,
     ) -> Result<(), ModuleCacheError> {
         if !h_tree.covers(id) {
             return Err(ModuleCacheError::NotResponsible);

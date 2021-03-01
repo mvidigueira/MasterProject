@@ -7,7 +7,7 @@ use drop::net::{
     TcpListener,
 };
 
-use crate::core::{TobRequest, TobResponse};
+use crate::corenode::{TobRequest, TobResponse};
 use classic::{BestEffort, BestEffortBroadcaster, Broadcaster, System};
 
 use super::{BroadcastError, TobServerError};
@@ -191,8 +191,8 @@ impl TobRequestHandler {
 
 #[cfg(test)]
 mod test {
-    use crate::core::test::*;
-    use crate::core::{DataTree, TobRequest, TobResponse};
+    use crate::corenode::test::*;
+    use crate::corenode::{DataTree, TobRequest, TobResponse};
 
     use drop::crypto::key::exchange::Exchanger;
     use tracing::trace_span;

@@ -1,16 +1,13 @@
 mod corenode;
 mod memory_usage;
-mod module_cache;
-mod history_tree;
-mod prefix;
 mod error;
 mod comm_structs;
+mod history_tree;
+mod prefix;
 
 #[cfg(test)]
 pub mod test;
 
-
-use module_cache::ModuleCache;
 use prefix::Prefix;
 
 pub use corenode::CoreNode;

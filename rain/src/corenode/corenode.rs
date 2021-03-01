@@ -13,9 +13,9 @@ use drop::net::{
 
 use std::hash::{Hash, Hasher};
 
+use crate::utils::ModuleCache;
 use super::{
-    memory_usage::MemoryReport, CoreNodeError, DataTree, ExecuteResult, HTree,
-    ModuleCache, Prefix, RecordID, RuleTransaction, PayloadForTob, TobRequest,
+    memory_usage::MemoryReport, CoreNodeError, DataTree, ExecuteResult, HTree, Prefix, RecordID, RuleTransaction, PayloadForTob, TobRequest,
     Touch, UserCoreRequest, UserCoreResponse, SystemConfig
 };
 use wasm_common_bindings::Ledger;
@@ -33,7 +33,7 @@ use tracing_futures::Instrument;
 const RECORD_LIMIT: usize = 400;
 
 type ProtectedTree = Arc<RwLock<HTree>>;
-type ProtectedModuleCache = Arc<RwLock<ModuleCache>>;
+type ProtectedModuleCache = Arc<RwLock<ModuleCache<RecordID>>>;
 type ProtectedConfig = Arc<SystemConfig<Arc<Info>>>;
 
 #[derive(Clone, PartialEq)]
@@ -283,7 +283,7 @@ impl ClientRequestHandler {
         rule_hash: &Digest,
         args: &Vec<u8>,
         tree: &DataTree,
-        module_cache: &mut ModuleCache,
+        module_cache: &mut ModuleCache<RecordID>,
         local_tree: &HTree,
     ) -> Result<Ledger, ()> {
         let instance =
@@ -628,7 +628,7 @@ impl TobRequestHandler {
 mod test {
     use super::super::test::*;
     use super::super::{
-        DataTree, TobRequest, TobResponse, UserCoreRequest, UserCoreResponse,
+        DataTree, UserCoreRequest, UserCoreResponse,
     };
     extern crate test;
     use super::*;

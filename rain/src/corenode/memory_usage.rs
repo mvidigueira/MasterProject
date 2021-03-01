@@ -1,4 +1,4 @@
-use super::{HTree, Prefix, RecordID};
+use crate::corenode::{HTree, Prefix, RecordID};
 use drop::crypto::Digest;
 use std::mem;
 use std::sync::Arc;
