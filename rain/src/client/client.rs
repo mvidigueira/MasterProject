@@ -118,7 +118,7 @@ impl ClientNode {
 
     async fn send_execution_request(
         &self,
-        corenode_info: &DirectoryInfo,
+        corenode_info: &CoreNodeInfo,
         execute: &UserCoreRequest,
     ) -> Result<(ExecuteResult, BlsSignature), ClientError> {
         match execute {
@@ -130,15 +130,18 @@ impl ClientNode {
 
         let mut connection = self
             .connector
-            .connect(corenode_info.public(), &corenode_info.addr())
+            .connect(corenode_info.dir_info().public(), &corenode_info.dir_info().addr())
             .await?;
 
         connection.send(execute).await?;
         let resp = connection.receive::<UserCoreResponse>().await?;
         match resp {
             UserCoreResponse::Execute((result, sig)) => {
-                // TODO: verify signature here using CoreNodeInfo
-                Ok((result, sig.into()))
+                let s: BlsSignature = sig.into();
+
+                // Optional: verify signature here using CoreNodeInfo
+
+                Ok((result, s))
             }
             _ => Err(ReplyError::new().into()),
         }
@@ -226,7 +229,7 @@ impl ClientNode {
             .drain(..)
             .enumerate()
             .map(|(i, k)| {
-                async move { (i, self.send_execution_request(k.dir_info(), txr).await) }
+                async move { (i, self.send_execution_request(k, txr).await) }
                     .boxed()
             })
             .collect();

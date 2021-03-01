@@ -1,4 +1,5 @@
-use super::{HTree, MerkleError};
+use super::HTree;
+use merkle::MerkleError;
 use drop::crypto::Digest;
 use std::collections::{hash_map::Entry, HashMap};
 

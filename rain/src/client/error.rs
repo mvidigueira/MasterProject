@@ -1,6 +1,6 @@
 use macros::error;
 use drop::net::{ConnectError, ReceiveError, SendError};
-use merkle::error::MerkleError;
+use merkle::MerkleError;
 use drop::error::Error;
 
 error! {

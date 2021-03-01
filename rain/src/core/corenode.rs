@@ -704,11 +704,23 @@ mod test {
 
     // move this test to integration tests or client
     #[tokio::test]
-    async fn request_add() {
+    async fn request_execute() {
         init_logger();
 
+        let filename =
+            "contract_3/target/wasm32-unknown-unknown/release/contract_test.wasm";
+        let rule_record_id = "transfer_rule".to_string();
+        let rule_buffer =
+            std::fs::read(filename).expect("could not load file into buffer");
+        let rule_digest = drop::crypto::hash(&rule_buffer).unwrap();
+
+        let mut t = DataTree::new();
+        t.insert("Alice".to_string(), (1000i32).to_be_bytes().to_vec());
+        t.insert("Bob".to_string(), (1000i32).to_be_bytes().to_vec());
+        t.insert(rule_record_id.clone(), rule_buffer);
+
         let config =
-            SetupConfig::setup(get_balanced_prefixes(1), DataTree::new(), 10)
+            SetupConfig::setup(get_balanced_prefixes(1), t.clone(), 10)
                 .await;
 
         let mut c_node = create_peer_and_connect(&config.corenodes[0].2).await;
@@ -717,7 +729,7 @@ mod test {
         let local = c_node.local_addr().expect("getaddr failed");
 
         async move {
-            let txr = UserCoreRequest::GetProof(vec![String::from("Alan")]);
+            let txr = UserCoreRequest::GetProof(vec!["Alice".to_string(), "Bob".to_string()]);
             c_node.send(&txr).await.expect("send failed");
 
             let resp = c_node
@@ -725,25 +737,35 @@ mod test {
                 .await
                 .expect("recv failed");
 
-            assert_eq!(
-                resp,
-                UserCoreResponse::GetProof((1, DataTree::new())),
-                "invalid response from corenode"
+            let proof = match resp {
+               UserCoreResponse::GetProof((_, p)) => p,
+               _ => unreachable!(),
+            };
+
+            let args = ("Alice".to_string(), "Bob".to_string(), 50i32);
+            let rt = RuleTransaction::new(
+                proof,
+                rule_record_id,
+                rule_digest,
+                vec!["Alice".to_string(), "Bob".to_string()],
+                &args,
             );
-
-            let txr = TobRequest::Apply((get_example_tobpayload(), get_example_bls_sig_info()));
-            c_tob.send(&txr).await.expect("send failed");
-
+    
+            let txr: &UserCoreRequest = &UserCoreRequest::Execute(rt);
+            c_node.send(&txr).await.expect("send failed");
             let resp =
-                c_tob.receive::<TobResponse>().await.expect("recv failed");
+                c_node.receive::<UserCoreResponse>().await.expect("recv failed");
 
-            assert_eq!(
-                resp,
-                TobResponse::Result(String::from(
-                    "Request successfully forwarded to all peers"
-                )),
-                "invalid response from tob server"
-            );
+            let (res, bls_sig) = match resp {
+                UserCoreResponse::Execute(x) => x,
+                _ => panic!("wrong response from corenode"),
+            };
+
+            // assert_eq!(
+            //     resp,
+            //     UserCoreResponse::Execute((res, bls_sig)),
+            //     "wrong response from corenode"
+            // );
 
             let _ = c_tob.close().await;
             let _ = c_node.close().await;

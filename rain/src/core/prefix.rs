@@ -45,14 +45,9 @@ where
             }
         }
 
-        // for (node_info, local_prefixes) in mapping.drain(..) {
-        //     for prefix in local_prefixes {
-        //         let e = prefix_map.entry(prefix.clone()).or_insert(vec![]);
-        //         e.push(node_info.clone());
-        //     }
-        // }
         let prefix_list: Vec<(Prefix, Vec<I>)> =
             prefix_map.drain().collect();
+
         SystemConfig::new(prefix_list)
 
     }

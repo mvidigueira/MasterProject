@@ -8,7 +8,7 @@ use super::util::{bit, set_bit, leading_bits_in_common};
 use drop::crypto::{self, Digest};
 use std::fmt;
 
-pub use crate::error::MerkleError::{
+pub use crate::MerkleError::{
     self, KeyBehindPlaceholder, KeyNonExistant,
 };
 

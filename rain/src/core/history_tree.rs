@@ -1,4 +1,4 @@
-use merkle::error::MerkleError;
+use merkle::MerkleError;
 use merkle::Tree;
 
 use std::borrow::Borrow;

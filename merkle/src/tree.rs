@@ -246,7 +246,7 @@ where
     /// ```
     /// extern crate merkle;
     /// use merkle::Tree;
-    /// use merkle::error::MerkleError::KeyNonExistant;
+    /// use merkle::MerkleError::KeyNonExistant;
     ///
     /// let mut tree = Tree::new();
     /// tree.insert(1, "a");
@@ -347,7 +347,7 @@ where
     /// ```
     /// extern crate merkle;
     /// use merkle::Tree;
-    /// use merkle::error::MerkleError::{KeyBehindPlaceholder, KeyNonExistant};
+    /// use merkle::MerkleError::{KeyBehindPlaceholder, KeyNonExistant};
     ///
     /// let mut tree = Tree::new();
     /// tree.insert(1, "a");

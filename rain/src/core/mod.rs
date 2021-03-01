@@ -27,7 +27,7 @@ pub use bls_amcl::common::{Keypair as BlsKeypair, Params as BlsParams, SigKey as
 pub use bls_amcl::multi_sig_fast::{AggregatedVerKeyFast as BlsVerifySignatures, MultiSignatureFast as BlsAggregateSignatures};
 pub use bls_amcl::simple::Signature as BlsSignature;
 
-use merkle::{error::MerkleError, Tree};
+use merkle::Tree;
 
 pub type RecordID = String;
 pub type RecordVal = Vec<u8>;
