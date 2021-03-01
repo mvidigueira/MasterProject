@@ -5,10 +5,10 @@ use std::sync::Arc;
 use drop::crypto::{key::exchange::Exchanger, Digest};
 use drop::net::{Connector, DirectoryInfo, TcpConnector};
 
-use super::{BlsSignature, BlsAggregateSignatures, BlsSigInfo};
+use crate::core::{BlsSignature, BlsAggregateSignatures, BlsSigInfo};
 
-use super::{
-    history_tree::HistoryTree, CoreNodeInfo, DataTree, ExecuteResult,
+use crate::core::{
+    HistoryTree, CoreNodeInfo, DataTree, ExecuteResult,
     PayloadForTob, RecordID, RuleTransaction, TobRequest, TobResponse,
     Touch, UserCoreRequest, UserCoreResponse, SystemConfig,
 };
@@ -18,7 +18,7 @@ use super::{ClientError, InconsistencyError, ReplyError};
 use futures::future::{self, FutureExt};
 use std::future::Future;
 
-use tracing::{debug, error};
+use tracing::{error};
 
 pub struct ClientNode {
     corenodes_config: SystemConfig<Arc<CoreNodeInfo>>,
@@ -138,7 +138,7 @@ impl ClientNode {
         match resp {
             UserCoreResponse::Execute((result, sig)) => {
                 // TODO: verify signature here using CoreNodeInfo
-                Ok((result, sig.0))
+                Ok((result, sig.into()))
             }
             _ => Err(ReplyError::new().into()),
         }
@@ -265,8 +265,8 @@ impl ClientNode {
 mod test {
     use super::*;
 
-    use super::super::test::*;
-    use super::super::DataTree;
+    use crate::core::test::*;
+    use super::DataTree;
 
     use std::time::Duration;
     use tokio::time::timeout;
@@ -581,7 +581,7 @@ mod test {
                 .expect("client error when sending apply request");
 
             let args_2 = ("Charlie".to_string(), "Dave".to_string(), 50i32);
-            let (res, bls_sig) = client_node_2
+            let (res, _) = client_node_2
                 .send_execution_requests(
                     proof.clone(),
                     rule_record_id.clone(),

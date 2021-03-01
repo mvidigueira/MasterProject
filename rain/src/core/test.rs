@@ -6,8 +6,10 @@ use super::{BlsSignature, BlsSigKey, BlsSigInfo, BlsKeypair, BlsParams};
 use rand::thread_rng;
 
 use super::{
-    CoreNode, CoreNodeInfo, DataTree, PayloadForTob, Prefix, RuleTransaction, TobServer, SystemConfig
+    CoreNode, CoreNodeInfo, DataTree, PayloadForTob, Prefix, RuleTransaction, SystemConfig
 };
+
+use crate::tob::TobServer;
 
 use drop::crypto::key::exchange::{Exchanger, KeyPair as CommKeyPair};
 use drop::net::{

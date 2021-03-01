@@ -1,4 +1,5 @@
-use super::{Digest, HTree, Prefix, RecordID};
+use super::{HTree, Prefix, RecordID};
+use drop::crypto::Digest;
 use std::mem;
 use std::sync::Arc;
 

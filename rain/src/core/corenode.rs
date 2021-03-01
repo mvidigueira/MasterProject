@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use super::{BlsKeypair, BlsParams, BlsSigKey, BlsVerKey, BlsSignature, BlsSigWrapper, BlsSigInfo, BlsVerifySignatures};
+use super::{BlsKeypair, BlsParams, BlsSigKey, BlsVerKey, BlsSignature, BlsSigInfo, BlsVerifySignatures};
 
 use drop::crypto::{
     key::exchange::{Exchanger, PublicKey, KeyPair as CommKeyPair},
@@ -10,7 +10,6 @@ use drop::crypto::{
 use drop::net::{
     Connection, DirectoryInfo, Listener, ListenerError, TcpListener,
 };
-use rand::thread_rng;
 
 use std::hash::{Hash, Hasher};
 
@@ -373,18 +372,18 @@ impl ClientRequestHandler {
     async fn handle_execute(
         data: &mut ProtectedTree,
         module_cache: &mut ProtectedModuleCache,
-        mut rt: RuleTransaction,
+        rt: RuleTransaction,
     ) -> Result<ExecuteResult, CoreNodeError> {
         let misc_digest =
-            super::get_misc_digest(&rt.rule_version, &rt.rule_arguments);
+            super::get_misc_digest(rt.rule_version(), rt.rule_arguments());
 
-        let used_record_count: usize = rt.merkle_proof.len();
+        let used_record_count: usize = rt.proof().len();
         if used_record_count > RECORD_LIMIT {
             let cause = format!("Error processing transaction: record limit exceeded. Limit is {}, rule touches {}", RECORD_LIMIT, used_record_count);
             error!("{}", cause);
             return Ok(ExecuteResult::fail(
-                rt.rule_record_id,
-                rt.rule_version,
+                rt.rule_id().clone(),
+                rt.rule_version().clone(),
                 misc_digest,
                 cause,
             ));
@@ -393,14 +392,14 @@ impl ClientRequestHandler {
         let tree_guard = data.read().await;
 
         if !tree_guard
-            .consistent_given_records(&rt.merkle_proof, &rt.touched_records)
+            .consistent_given_records(rt.proof(), rt.touched_records())
         {
             let cause =
                 format!("Error processing transaction: invalid merkle proof");
             error!("{}", cause);
             return Ok(ExecuteResult::fail(
-                rt.rule_record_id,
-                rt.rule_version,
+                rt.rule_id().clone(),
+                rt.rule_version().clone(),
                 misc_digest,
                 cause,
             ));
@@ -408,10 +407,10 @@ impl ClientRequestHandler {
 
         let mut cache_guard = module_cache.write().await;
         let res = ClientRequestHandler::execute_transaction(
-            &rt.rule_record_id,
-            &rt.rule_version,
-            &rt.rule_arguments,
-            &rt.merkle_proof,
+            rt.rule_id(),
+            rt.rule_version(),
+            rt.rule_arguments(),
+            rt.proof(),
             &mut cache_guard,
             &tree_guard,
         );
@@ -421,8 +420,8 @@ impl ClientRequestHandler {
         match res {
             Err(_) => {
                 return Ok(ExecuteResult::fail(
-                    rt.rule_record_id,
-                    rt.rule_version,
+                    rt.rule_id().clone(),
+                    rt.rule_version().clone(),
                     misc_digest,
                     format!("failed executing transaction : error message WIP"),
                 ))
@@ -431,13 +430,13 @@ impl ClientRequestHandler {
                 let mut output: Vec<(RecordID, Touch)> = vec![];
 
                 let mut input_ledger: Ledger = rt
-                    .merkle_proof
+                    .proof()
                     .clone_to_vec()
                     .into_iter()
-                    .filter(|(k, _)| k != &rt.rule_record_id)
+                    .filter(|(k, _)| k != rt.rule_id())
                     .collect();
 
-                for k in rt.touched_records.drain(..) {
+                for k in rt.touched_records().clone().drain(..) {
                     match (input_ledger.remove(&k), output_ledger.remove(&k)) {
                         (None, Some(v)) => {
                             output.push((k, Touch::Added(v)));
@@ -464,8 +463,8 @@ impl ClientRequestHandler {
 
                 info!("Created response. Returning...");
                 Ok(ExecuteResult::new(
-                    rt.rule_record_id,
-                    rt.rule_version,
+                    rt.rule_id().clone(),
+                    rt.rule_version().clone(),
                     misc_digest,
                     output,
                 ))
@@ -494,10 +493,10 @@ impl ClientRequestHandler {
                 UserCoreRequest::Execute(rt) => {
                     info!(
                         "Received execute request. Rule: {:#?}",
-                        rt.rule_record_id
+                        rt.rule_id()
                     );
 
-                    let proof = rt.merkle_proof.clone();
+                    let proof = rt.proof().clone();
 
                     let result = Self::handle_execute(
                         &mut self.data,
@@ -547,21 +546,21 @@ impl TobRequestHandler {
     }
 
     fn validate_sigs(&self, payload: &PayloadForTob, sig_info: &BlsSigInfo) -> bool {
-        let mut nodes = self.config.get_group_covering(&payload.rule_record_id);
+        let mut nodes = self.config.get_group_covering(payload.rule_id());
         nodes.sort_by(|x, y| x.dir_info().public().cmp(&y.dir_info().public()));
-        let ver_keys: Vec<&BlsVerKey> = nodes.drain(..).enumerate().filter(|(i,_)| sig_info.mask[*i] == true).map(|(_, k)| k.bls_public()).collect();
+        let ver_keys: Vec<&BlsVerKey> = nodes.drain(..).enumerate().filter(|(i,_)| sig_info.mask()[*i] == true).map(|(_, k)| k.bls_public()).collect();
         let pk = BlsVerifySignatures::from_verkeys(ver_keys);
 
         let params = BlsParams::new("some publicly known string".as_bytes());
         let d = drop::crypto::hash(payload).unwrap();
 
-        sig_info.sig.verify(d.as_ref(), &pk, &params)
+        sig_info.sig().verify(d.as_ref(), &pk, &params)
     }
 
     async fn serve(mut self) -> Result<(), CoreNodeError> {
         while let Ok(txr) = self.connection.receive::<TobRequest>().await {
             match txr {
-                TobRequest::Apply((mut req, sig)) => {
+                TobRequest::Apply((req, sig)) => {
                     if !self.validate_sigs(&req, &sig) {
                         let cause = format!("Error processing transaction: invalid signatures");
                         error!("{}", cause);
@@ -569,12 +568,12 @@ impl TobRequestHandler {
                     }
 
                     let touched_records =
-                        req.output.iter().map(|x| x.0.clone()).collect();
+                        req.output().iter().map(|x| x.0.clone()).collect();
 
                     let mut tree_guard = self.data.write().await;
 
                     if !tree_guard.consistent_given_records(
-                        &req.input_merkle_proof,
+                        req.proof(),
                         &touched_records,
                     ) {
                         let cause = format!("Error processing transaction: invalid merkle proof");
@@ -583,17 +582,17 @@ impl TobRequestHandler {
                     }
 
                     tree_guard.merge_consistent(
-                        &req.input_merkle_proof,
+                        req.proof(),
                         &touched_records,
                     );
 
-                    for (k, t) in req.output.drain(..) {
+                    for (k, t) in req.output().iter() {
                         match t {
                             Touch::Modified(v) | Touch::Added(v) => {
-                                tree_guard.insert(k, v);
+                                tree_guard.insert(k.clone(), v.clone());
                             }
                             Touch::Deleted => {
-                                tree_guard.remove(&k);
+                                tree_guard.remove(k);
                             }
                             Touch::Read => (),
                         }
@@ -633,8 +632,10 @@ mod test {
     };
     extern crate test;
     use super::*;
-    use test::Bencher;
-    use wasm_common_bindings::{ContextLedger, Ledger};
+    // use test::Bencher;
+    // use wasm_common_bindings::{ContextLedger, Ledger};
+
+    use rand::thread_rng;
 
     use tracing::trace_span;
     use tracing_futures::Instrument;
@@ -753,19 +754,19 @@ mod test {
         config.tear_down().await;
     }
 
-    fn get_proof_for_records(data: &HTree, records: Vec<RecordID>) -> DataTree {
-        let mut t = data.get_validator();
-        for r in records {
-            match data.get_proof_with_placeholder(&r) {
-                Ok(proof) => {
-                    t.merge(&proof).unwrap();
-                }
-                Err(_) => (),
-            }
-        }
+    // fn get_proof_for_records(data: &HTree, records: Vec<RecordID>) -> DataTree {
+    //     let mut t = data.get_validator();
+    //     for r in records {
+    //         match data.get_proof_with_placeholder(&r) {
+    //             Ok(proof) => {
+    //                 t.merge(&proof).unwrap();
+    //             }
+    //             Err(_) => (),
+    //         }
+    //     }
 
-        t
-    }
+    //     t
+    // }
 
     // fn handle_execute(
     //     htree: &mut HTree,

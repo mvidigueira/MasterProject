@@ -7,7 +7,7 @@ use drop::net::{
     TcpListener,
 };
 
-use super::{TobRequest, TobResponse};
+use crate::core::{TobRequest, TobResponse};
 use classic::{BestEffort, BestEffortBroadcaster, Broadcaster, System};
 
 use super::{BroadcastError, TobServerError};
@@ -189,59 +189,59 @@ impl TobRequestHandler {
     }
 }
 
-// #[cfg(test)]
-// mod test {
-//     use super::super::test::*;
-//     use super::super::{DataTree, TobRequest, TobResponse};
+#[cfg(test)]
+mod test {
+    use crate::core::test::*;
+    use crate::core::{DataTree, TobRequest, TobResponse};
 
-//     use drop::crypto::key::exchange::Exchanger;
-//     use tracing::trace_span;
-//     use tracing_futures::Instrument;
+    use drop::crypto::key::exchange::Exchanger;
+    use tracing::trace_span;
+    use tracing_futures::Instrument;
 
-//     #[tokio::test]
-//     async fn tob_shutdown() {
-//         init_logger();
+    #[tokio::test]
+    async fn tob_shutdown() {
+        init_logger();
 
-//         let (exit_dir, handle_dir, _) = setup_dir(next_test_ip4()).await;
-//         let (exit_tob, handle_tob, _) =
-//             setup_tob(next_test_ip4(), Exchanger::random(), vec![]).await;
+        let (exit_dir, handle_dir, _) = setup_dir(next_test_ip4()).await;
+        let (exit_tob, handle_tob, _) =
+            setup_tob(next_test_ip4(), Exchanger::random(), vec![]).await;
 
-//         wait_for_server(exit_tob, handle_tob).await;
-//         wait_for_server(exit_dir, handle_dir).await;
-//     }
+        wait_for_server(exit_tob, handle_tob).await;
+        wait_for_server(exit_dir, handle_dir).await;
+    }
 
-//     #[tokio::test]
-//     async fn tob_forwarding() {
-//         init_logger();
+    #[tokio::test]
+    async fn tob_forwarding() {
+        init_logger();
 
-//         let config =
-//             SetupConfig::setup(get_balanced_prefixes(1), DataTree::new(), 10)
-//                 .await;
+        let config =
+            SetupConfig::setup(get_balanced_prefixes(1), DataTree::new(), 10)
+                .await;
 
-//         let mut connection = create_peer_and_connect(&config.tob_info).await;
+        let mut connection = create_peer_and_connect(&config.tob_info).await;
 
-//         let local = connection.local_addr().expect("getaddr failed");
+        let local = connection.local_addr().expect("getaddr failed");
 
-//         async move {
-//             let txr = TobRequest::Apply((get_example_tobpayload(), get_example_bls_sig_info()));
-//             connection.send(&txr).await.expect("send failed");
+        async move {
+            let txr = TobRequest::Apply((get_example_tobpayload(), get_example_bls_sig_info()));
+            connection.send(&txr).await.expect("send failed");
 
-//             let resp = connection
-//                 .receive::<TobResponse>()
-//                 .await
-//                 .expect("recv failed");
+            let resp = connection
+                .receive::<TobResponse>()
+                .await
+                .expect("recv failed");
 
-//             assert_eq!(
-//                 resp,
-//                 TobResponse::Result(String::from(
-//                     "Request successfully forwarded to all peers"
-//                 )),
-//                 "invalid response from tob server"
-//             );
-//         }
-//         .instrument(trace_span!("adder", client = %local))
-//         .await;
+            assert_eq!(
+                resp,
+                TobResponse::Result(String::from(
+                    "Request successfully forwarded to all peers"
+                )),
+                "invalid response from tob server"
+            );
+        }
+        .instrument(trace_span!("adder", client = %local))
+        .await;
 
-//         config.tear_down().await;
-//     }
-// }
+        config.tear_down().await;
+    }
+}

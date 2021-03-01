@@ -1,6 +1,6 @@
 use macros::error;
 use std::io::Error as IoError;
-use drop::net::ListenerError;
+use drop::net::{ListenerError, SendError};
 use drop::error::Error;
 
 error! {
