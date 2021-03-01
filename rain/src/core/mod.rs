@@ -2,7 +2,6 @@ mod client;
 mod corenode;
 mod memory_usage;
 mod module_cache;
-mod tob_server;
 
 pub mod history_tree;
 pub mod prefix;
@@ -18,7 +17,7 @@ use history_tree::HistoryTree;
 pub use module_cache::{ModuleCache, ModuleCacheError};
 pub use prefix::Prefix;
 pub use prefix::SystemConfig;
-pub use tob_server::TobServer;
+pub use crate::core::tob::TobServer;
 
 use std::io::Error as IoError;
 
