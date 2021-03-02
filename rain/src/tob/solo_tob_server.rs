@@ -191,7 +191,7 @@ impl TobRequestHandler {
 
 #[cfg(test)]
 mod test {
-    use crate::corenode::test::*;
+    use crate::utils::test::*;
     use crate::corenode::{DataTree, TobRequest, TobResponse};
 
     use drop::crypto::key::exchange::Exchanger;

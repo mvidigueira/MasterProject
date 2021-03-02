@@ -1,4 +1,5 @@
-use super::{RecordID, RecordVal, BlsSignature, Tree, DataTree, Digest};
+use super::{RecordID, RecordVal, BlsSignature, DataTree, Digest};
+use merkle::Tree;
 
 use std::hash::{Hash, Hasher};
 

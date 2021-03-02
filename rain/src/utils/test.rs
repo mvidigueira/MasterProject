@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
 
 use rand::{thread_rng, prelude::SliceRandom};
-use super::{
+use crate::corenode::{
     BlsSignature, BlsSigKey, BlsSigInfo, BlsKeypair, BlsParams,
     CoreNode, CoreNodeInfo, DataTree, PayloadForTob, Prefix, RuleTransaction, SystemConfig
 };

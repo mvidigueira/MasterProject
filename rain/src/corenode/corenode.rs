@@ -626,7 +626,7 @@ impl TobRequestHandler {
 
 #[cfg(test)]
 mod test {
-    use super::super::test::*;
+    use crate::utils::test::*;
     use super::super::{
         DataTree, UserCoreRequest, UserCoreResponse,
     };
@@ -756,11 +756,13 @@ mod test {
             let resp =
                 c_node.receive::<UserCoreResponse>().await.expect("recv failed");
 
-            let (res, bls_sig) = match resp {
+            let (_res, _bls_sig) = match resp {
                 UserCoreResponse::Execute(x) => x,
                 _ => panic!("wrong response from corenode"),
             };
 
+            // TODO: assert result and verify signature;
+            
             // assert_eq!(
             //     resp,
             //     UserCoreResponse::Execute((res, bls_sig)),

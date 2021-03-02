@@ -266,7 +266,7 @@ impl ClientNode {
 mod test {
     use super::*;
 
-    use crate::corenode::test::*;
+    use crate::utils::test::*;
     use super::DataTree;
 
     use std::time::Duration;
@@ -944,7 +944,7 @@ mod test {
     }
 
     // #[tokio::test]
-    async fn memory_footprint() {
+    async fn _memory_footprint() {
         init_logger();
         let nr_peer = 5;
 
@@ -1061,7 +1061,7 @@ mod test {
     use rand::prelude::*;
 
     // #[tokio::test]
-    async fn success_rate() {
+    async fn _success_rate() {
         init_logger();
         let nr_peer = 1;
 
