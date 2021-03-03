@@ -45,11 +45,9 @@ where
             }
         }
 
-        let prefix_list: Vec<(Prefix, Vec<I>)> =
-            prefix_map.drain().collect();
+        let prefix_list: Vec<(Prefix, Vec<I>)> = prefix_map.drain().collect();
 
         SystemConfig::new(prefix_list)
-
     }
 }
 

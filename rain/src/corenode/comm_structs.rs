@@ -1,4 +1,4 @@
-use super::{RecordID, RecordVal, BlsSignature, DataTree, Digest};
+use super::{BlsSignature, DataTree, Digest, RecordID, RecordVal};
 use merkle::Tree;
 
 use std::hash::{Hash, Hasher};
@@ -22,7 +22,7 @@ unsafe impl Sync for UserCoreRequest {}
 impl classic::Message for UserCoreRequest {}
 
 #[derive(classic::Serialize, classic::Deserialize, Debug, Clone, PartialEq)]
-pub struct BlsSigWrapper (BlsSignature);
+pub struct BlsSigWrapper(BlsSignature);
 impl Eq for BlsSigWrapper {}
 impl Hash for BlsSigWrapper {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -54,10 +54,7 @@ impl Hash for BlsSigInfo {
 }
 impl BlsSigInfo {
     pub fn new(sig: BlsSignature, mask: Vec<bool>) -> Self {
-        Self {
-            sig,
-            mask
-        }
+        Self { sig, mask }
     }
 
     pub fn sig(&self) -> &BlsSignature {
@@ -67,7 +64,6 @@ impl BlsSigInfo {
         &self.mask
     }
 }
-
 
 #[derive(
     classic::Serialize, classic::Deserialize, Debug, Clone, Hash, PartialEq, Eq,

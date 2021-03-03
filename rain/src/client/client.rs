@@ -6,9 +6,10 @@ use drop::crypto::{key::exchange::Exchanger, Digest};
 use drop::net::{Connector, DirectoryInfo, TcpConnector};
 
 use crate::corenode::{
-    HistoryTree, CoreNodeInfo, DataTree, ExecuteResult,
-    PayloadForTob, RecordID, RuleTransaction, TobRequest, TobResponse,
-    Touch, UserCoreRequest, UserCoreResponse, SystemConfig, BlsSignature, BlsAggregateSignatures, BlsSigInfo
+    BlsAggregateSignatures, BlsSigInfo, BlsSignature, CoreNodeInfo, DataTree,
+    ExecuteResult, HistoryTree, PayloadForTob, RecordID, RuleTransaction,
+    SystemConfig, TobRequest, TobResponse, Touch, UserCoreRequest,
+    UserCoreResponse,
 };
 
 use super::{ClientError, InconsistencyError, ReplyError};
@@ -16,7 +17,7 @@ use super::{ClientError, InconsistencyError, ReplyError};
 use futures::future::{self, FutureExt};
 use std::future::Future;
 
-use tracing::{error};
+use tracing::error;
 
 pub struct ClientNode {
     corenodes_config: SystemConfig<Arc<CoreNodeInfo>>,
@@ -128,7 +129,10 @@ impl ClientNode {
 
         let mut connection = self
             .connector
-            .connect(corenode_info.dir_info().public(), &corenode_info.dir_info().addr())
+            .connect(
+                corenode_info.dir_info().public(),
+                &corenode_info.dir_info().addr(),
+            )
             .await?;
 
         connection.send(execute).await?;
@@ -156,7 +160,12 @@ impl ClientNode {
     // Collects results from corenodes until there is a majority of replies with the same result
     async fn collect_results(
         futures: Vec<
-            impl Future<Output = (usize, Result<(ExecuteResult, BlsSignature), ClientError>)> + Unpin,
+            impl Future<
+                    Output = (
+                        usize,
+                        Result<(ExecuteResult, BlsSignature), ClientError>,
+                    ),
+                > + Unpin,
         >,
     ) -> (ExecuteResult, BlsSigInfo) {
         let n = futures.len();
@@ -164,7 +173,8 @@ impl ClientNode {
 
         let mut remaining = futures;
 
-        let mut counts: HashMap<ExecuteResult, Vec<(usize, BlsSignature)>> = HashMap::new();
+        let mut counts: HashMap<ExecuteResult, Vec<(usize, BlsSignature)>> =
+            HashMap::new();
 
         loop {
             let ret = future::select_all(remaining).await;
@@ -175,11 +185,15 @@ impl ClientNode {
                 match counts.entry(r.0) {
                     Entry::Vacant(entry) => {
                         if threshold == 1 {
-                            let sig = BlsAggregateSignatures::from_sigs(vec![&r.1]);
-                            let mask = Self::create_mask(vec!(i), n);
-                            return (entry.into_key(), BlsSigInfo::new(sig, mask));
+                            let sig =
+                                BlsAggregateSignatures::from_sigs(vec![&r.1]);
+                            let mask = Self::create_mask(vec![i], n);
+                            return (
+                                entry.into_key(),
+                                BlsSigInfo::new(sig, mask),
+                            );
                         } else {
-                            entry.insert(vec!((i, r.1)));
+                            entry.insert(vec![(i, r.1)]);
                         }
                     }
                     Entry::Occupied(mut entry) => {
@@ -187,8 +201,11 @@ impl ClientNode {
                             let mut e = entry.remove_entry();
                             e.1.push((i, r.1));
 
-                            let (nums, sigs): (Vec<usize>, Vec<BlsSignature>) = e.1.drain(..).unzip();
-                            let sig = BlsAggregateSignatures::from_sigs(sigs.iter().collect());
+                            let (nums, sigs): (Vec<usize>, Vec<BlsSignature>) =
+                                e.1.drain(..).unzip();
+                            let sig = BlsAggregateSignatures::from_sigs(
+                                sigs.iter().collect(),
+                            );
                             let mask = Self::create_mask(nums, n);
 
                             return (e.0, BlsSigInfo::new(sig, mask));
@@ -266,8 +283,8 @@ impl ClientNode {
 mod test {
     use super::*;
 
-    use crate::utils::test::*;
     use super::DataTree;
+    use crate::utils::test::*;
 
     use std::time::Duration;
     use tokio::time::timeout;
@@ -293,11 +310,8 @@ mod test {
         let corenodes_config = &config.corenodes_config;
 
         async move {
-            let client_node = ClientNode::new(
-                tob_info,
-                corenodes_config,
-            )
-            .expect("client node creation failed");
+            let client_node = ClientNode::new(tob_info, corenodes_config)
+                .expect("client node creation failed");
 
             debug!("client node created");
 
@@ -345,16 +359,13 @@ mod test {
         let config =
             SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 10)
                 .await;
-        
+
         let corenodes_config = &config.corenodes_config;
         let tob_info = &config.tob_info;
 
         async move {
-            let client_node = ClientNode::new(
-                tob_info,
-                corenodes_config,
-            )
-            .expect("client node creation failed");
+            let client_node = ClientNode::new(tob_info, corenodes_config)
+                .expect("client node creation failed");
 
             debug!("client node created");
 
@@ -428,17 +439,11 @@ mod test {
         let tob_info = &config.tob_info;
 
         async move {
-            let client_node_1 = ClientNode::new(
-                tob_info,
-                corenodes_config,
-            )
-            .expect("client node 1 creation failed");
+            let client_node_1 = ClientNode::new(tob_info, corenodes_config)
+                .expect("client node 1 creation failed");
 
-            let client_node_2 = ClientNode::new(
-                tob_info,
-                corenodes_config,
-            )
-            .expect("client node 2 creation failed");
+            let client_node_2 = ClientNode::new(tob_info, corenodes_config)
+                .expect("client node 2 creation failed");
 
             let proof_1 = client_node_1
                 .get_merkle_proofs(vec!["Alice".to_string(), "Bob".to_string()])
@@ -639,11 +644,8 @@ mod test {
         let tob_info = &config.tob_info;
 
         async move {
-            let client_node_1 = ClientNode::new(
-                tob_info,
-                corenodes_config,
-            )
-            .expect("client node 1 creation failed");
+            let client_node_1 = ClientNode::new(tob_info, corenodes_config)
+                .expect("client node 1 creation failed");
 
             let proof_1 = client_node_1
                 .get_merkle_proofs(vec!["Alice".to_string(), "Bob".to_string()])
@@ -666,7 +668,7 @@ mod test {
                     res.misc_digest,
                     proof_1,
                     res.output.unwrap(),
-                    bls_sig
+                    bls_sig,
                 )
                 .await
                 .expect("client error when sending apply request");
@@ -784,11 +786,8 @@ mod test {
         let tob_info = &config.tob_info;
 
         async move {
-            let client_node_1 = ClientNode::new(
-                tob_info,
-                corenodes_config,
-            )
-            .expect("client node 1 creation failed");
+            let client_node_1 = ClientNode::new(tob_info, corenodes_config)
+                .expect("client node 1 creation failed");
 
             let proof_1 = client_node_1
                 .get_merkle_proofs(vec!["Alice".to_string(), "Bob".to_string()])
@@ -908,11 +907,8 @@ mod test {
         let tob_info = &config.tob_info;
 
         async move {
-            let client_node_1 = ClientNode::new(
-                tob_info,
-                corenodes_config,
-            )
-            .expect("client node 1 creation failed");
+            let client_node_1 = ClientNode::new(tob_info, corenodes_config)
+                .expect("client node 1 creation failed");
 
             let mut v: Vec<Instant> = vec![Instant::now()];
 
@@ -968,11 +964,8 @@ mod test {
         let tob_info = &config.tob_info;
 
         async move {
-            let client_node = ClientNode::new(
-                tob_info,
-                corenodes_config,
-            )
-            .expect("client node creation failed");
+            let client_node = ClientNode::new(tob_info, corenodes_config)
+                .expect("client node creation failed");
 
             debug!("client node created");
 
@@ -1085,11 +1078,8 @@ mod test {
         let tob_info = &config.tob_info;
 
         async move {
-            let client_node = ClientNode::new(
-                tob_info,
-                corenodes_config,
-            )
-            .expect("client node creation failed");
+            let client_node = ClientNode::new(tob_info, corenodes_config)
+                .expect("client node creation failed");
 
             debug!("client node created");
 

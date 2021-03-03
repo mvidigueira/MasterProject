@@ -1,7 +1,7 @@
-use macros::error;
-use drop::net::{ConnectError, ReceiveError, SendError};
-use merkle::MerkleError;
 use drop::error::Error;
+use drop::net::{ConnectError, ReceiveError, SendError};
+use macros::error;
+use merkle::MerkleError;
 
 error! {
     type: ReplyError,

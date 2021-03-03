@@ -2,9 +2,9 @@
 use crate::corenode::HistoryTree;
 use merkle::MerkleError;
 
-use std::hash::Hash;
 use serde::Serialize;
 use std::fmt::Debug;
+use std::hash::Hash;
 
 use drop::crypto::Digest;
 use std::collections::{hash_map::Entry, HashMap};
@@ -55,8 +55,9 @@ pub struct ModuleCache<K> {
 }
 
 impl<K> ModuleCache<K>
-where K: Serialize + Clone + Eq + Hash + Debug {
-    
+where
+    K: Serialize + Clone + Eq + Hash + Debug,
+{
     pub fn new() -> Self {
         ModuleCache {
             map: HashMap::new(),

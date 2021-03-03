@@ -191,8 +191,8 @@ impl TobRequestHandler {
 
 #[cfg(test)]
 mod test {
-    use crate::utils::test::*;
     use crate::corenode::{DataTree, TobRequest, TobResponse};
+    use crate::utils::test::*;
 
     use drop::crypto::key::exchange::Exchanger;
     use tracing::trace_span;
@@ -223,7 +223,10 @@ mod test {
         let local = connection.local_addr().expect("getaddr failed");
 
         async move {
-            let txr = TobRequest::Apply((get_example_tobpayload(), get_example_bls_sig_info()));
+            let txr = TobRequest::Apply((
+                get_example_tobpayload(),
+                get_example_bls_sig_info(),
+            ));
             connection.send(&txr).await.expect("send failed");
 
             let resp = connection

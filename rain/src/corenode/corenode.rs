@@ -13,7 +13,7 @@ use drop::net::{
 
 use std::hash::{Hash, Hasher};
 
-use crate::utils::ModuleCache;
+use crate::utils::ModuleCache; 
 use super::{
     memory_usage::MemoryReport, CoreNodeError, DataTree, ExecuteResult, HTree, Prefix, RecordID, RuleTransaction, PayloadForTob, TobRequest,
     Touch, UserCoreRequest, UserCoreResponse, SystemConfig
@@ -22,6 +22,8 @@ use wasm_common_bindings::Ledger;
 use wasmer::{MemoryView, NativeFunc};
 
 use futures::future::{self, Either};
+use futures::stream::StreamExt;
+use futures::Stream;
 
 use tokio::sync::oneshot::{channel, Receiver, Sender};
 use tokio::sync::RwLock;
@@ -30,11 +32,12 @@ use tokio::task;
 use tracing::{error, info, trace_span};
 use tracing_futures::Instrument;
 
+
 const RECORD_LIMIT: usize = 400;
 
 type ProtectedTree = Arc<RwLock<HTree>>;
 type ProtectedModuleCache = Arc<RwLock<ModuleCache<RecordID>>>;
-type ProtectedConfig = Arc<SystemConfig<Arc<Info>>>;
+type SharedConfig = Arc<SystemConfig<Arc<Info>>>;
 
 #[derive(Clone, PartialEq)]
 pub struct Info {
@@ -70,7 +73,6 @@ impl Info {
 
 pub struct CoreNode {
     listener: TcpListener,
-    tob_pub_key: PublicKey,
     exit: Receiver<()>,
 
     bls_kp: BlsKeypair,
@@ -78,16 +80,16 @@ pub struct CoreNode {
     data: ProtectedTree,
     module_cache: ProtectedModuleCache,
 
-    corenodes_config: ProtectedConfig,
+    corenodes_config: SharedConfig,
 }
 
 impl CoreNode {
-    pub async fn new(
+    pub async fn new<T: Stream<Item = TobRequest> + Send + Unpin + 'static>(
         node_addr: SocketAddr,
         comm_kp: CommKeyPair,
         bls_kp: BlsKeypair,
 
-        tob_info: &DirectoryInfo,
+        tob_stream: T,
         corenodes_config: SystemConfig<Arc<Info>>,
 
         dt: DataTree,
@@ -113,7 +115,6 @@ impl CoreNode {
         let ret = (
             Self {
                 listener: listener,
-                tob_pub_key: *tob_info.public(),
                 exit: rx,
 
                 bls_kp: bls_kp,
@@ -125,6 +126,22 @@ impl CoreNode {
             },
             tx,
         );
+
+        let config = ret.0.corenodes_config.clone();
+        let data = ret.0.data.clone();
+
+        task::spawn(
+            async move {
+                let request_handler =
+                    TobRequestHandler::new(config, tob_stream, data);
+
+                if let Err(_) = request_handler.serve().await {
+                    error!("failed request handling");
+                }
+            }
+            .instrument(trace_span!("tob_request_receiver")),
+        );
+
 
         Ok(ret)
     }
@@ -155,43 +172,26 @@ impl CoreNode {
 
             let peer_pub = connection.remote_key();
             let data = self.data.clone();
-            let config = self.corenodes_config.clone();
-            if peer_pub != Some(self.tob_pub_key) {
-                info!("CLIENT connection {:?}", peer_pub);
+            info!("CLIENT connection {:?}", peer_pub);
 
-                let module_cache = self.module_cache.clone();
-                let bls_sk = self.bls_kp.sig_key.clone();
+            let module_cache = self.module_cache.clone();
+            let bls_sk = self.bls_kp.sig_key.clone();
 
-                task::spawn(
-                    async move {
-                        let client_handler = ClientRequestHandler::new(
-                            connection,
-                            data,
-                            module_cache,
-                            bls_sk,
-                        );
+            task::spawn(
+                async move {
+                    let client_handler = ClientRequestHandler::new(
+                        connection,
+                        data,
+                        module_cache,
+                        bls_sk,
+                    );
 
-                        if let Err(_) = client_handler.serve().await {
-                            error!("failed request handling");
-                        }
+                    if let Err(_) = client_handler.serve().await {
+                        error!("failed request handling");
                     }
-                    .instrument(trace_span!("client_request_receiver")),
-                );
-            } else {
-                info!("TOB server connection: {:?}", peer_pub);
-
-                task::spawn(
-                    async move {
-                        let request_handler =
-                            TobRequestHandler::new(config, connection, data);
-
-                        if let Err(_) = request_handler.serve().await {
-                            error!("failed request handling");
-                        }
-                    }
-                    .instrument(trace_span!("tob_request_receiver")),
-                );
-            }
+                }
+                .instrument(trace_span!("client_request_receiver")),
+            );
         }
     }
 
@@ -534,19 +534,20 @@ impl ClientRequestHandler {
     }
 }
 
-struct TobRequestHandler {
-    config: ProtectedConfig,
-    connection: Connection,
+struct TobRequestHandler<T> {
+    config: SharedConfig,
+    tob_stream: T,
     data: ProtectedTree,
 }
 
-impl TobRequestHandler {
-    fn new(config: ProtectedConfig, connection: Connection, data: ProtectedTree) -> Self {
-        Self { config, connection, data }
+impl<T> TobRequestHandler<T> 
+where T: Stream<Item = TobRequest> + Unpin {
+    fn new(config: SharedConfig, tob_stream: T, data: ProtectedTree) -> Self {
+        Self { config, tob_stream, data }
     }
 
-    fn validate_sigs(&self, payload: &PayloadForTob, sig_info: &BlsSigInfo) -> bool {
-        let mut nodes = self.config.get_group_covering(payload.rule_id());
+    fn validate_sigs(config: &SharedConfig, payload: &PayloadForTob, sig_info: &BlsSigInfo) -> bool {
+        let mut nodes = config.get_group_covering(payload.rule_id());
         nodes.sort_by(|x, y| x.dir_info().public().cmp(&y.dir_info().public()));
         let ver_keys: Vec<&BlsVerKey> = nodes.drain(..).enumerate().filter(|(i,_)| sig_info.mask()[*i] == true).map(|(_, k)| k.bls_public()).collect();
         let pk = BlsVerifySignatures::from_verkeys(ver_keys);
@@ -558,10 +559,11 @@ impl TobRequestHandler {
     }
 
     async fn serve(mut self) -> Result<(), CoreNodeError> {
-        while let Ok(txr) = self.connection.receive::<TobRequest>().await {
+
+        while let Some(txr) = self.tob_stream.next().await {
             match txr {
                 TobRequest::Apply((req, sig)) => {
-                    if !self.validate_sigs(&req, &sig) {
+                    if !Self::validate_sigs(&self.config, &req, &sig) {
                         let cause = format!("Error processing transaction: invalid signatures");
                         error!("{}", cause);
                         continue;
@@ -616,10 +618,8 @@ impl TobRequestHandler {
             }
         }
 
-        self.connection.close().await?;
-
-        info!("end of TOB connection");
-
+        info!("End of TOB stream task");
+        
         Ok(())
     }
 }
@@ -639,6 +639,7 @@ mod test {
 
     use tracing::trace_span;
     use tracing_futures::Instrument;
+    use crate::tob::TobDeliverer;
 
     #[tokio::test]
     async fn corenode_shutdown() {
@@ -653,11 +654,12 @@ mod test {
         let mut rng = thread_rng();
         let bls_kp = BlsKeypair::new(&mut rng, &params);
 
+        let deliverer = TobDeliverer::new(next_test_ip4(), Exchanger::random(), fake_tob_info.public().clone()).await;
         let (exit_tx, handle, _) = setup_corenode(
             next_test_ip4(),
             CommKeyPair::random(),
             bls_kp,
-            &fake_tob_info,
+            deliverer,
             SystemConfig::new(vec!()),
             DataTree::new(),
             10,

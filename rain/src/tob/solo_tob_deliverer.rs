@@ -1,28 +1,29 @@
-use std::net::SocketAddr;
 use drop::crypto::key::exchange::{Exchanger, PublicKey};
-use drop::net::{Listener, 
-    TcpListener,
-};
+use drop::net::{Listener, TcpListener};
+use std::net::SocketAddr;
+use std::pin::Pin;
 
-use crate::corenode::{TobRequest};
-
+use crate::corenode::TobRequest;
 
 use futures::future::{self, Either};
 
-use tokio::sync::{oneshot, mpsc};
-use tokio::{task, pin};
-use tracing::{error};
+use tokio::sync::{mpsc, oneshot};
+use tokio::{pin, task};
+use tracing::error;
 
-use super::TobDeliver;
-use futures::Stream;
+use futures::{Stream, task::Context, task::Poll};
 
 pub struct TobDeliverer {
-    receiver: mpsc::Receiver<TobRequest>,
-    exit: Option<oneshot::Sender<()>>, 
+    receiver: Pin<Box<mpsc::Receiver<TobRequest>>>,
+    exit: Option<oneshot::Sender<()>>,
 }
 
 impl TobDeliverer {
-    pub async fn new(addr: SocketAddr, exchanger: Exchanger, tob_pub: PublicKey) -> Self {
+    pub async fn new(
+        addr: SocketAddr,
+        exchanger: Exchanger,
+        tob_pub: PublicKey,
+    ) -> Self {
         let mut listener = TcpListener::new(addr, exchanger.clone())
             .await
             .expect("listen failed");
@@ -34,7 +35,12 @@ impl TobDeliverer {
             let mut exit_fut = Some(exit);
 
             let mut connection = loop {
-                match future::select(exit_fut.take().unwrap(), listener.accept()).await {
+                match future::select(
+                    exit_fut.take().unwrap(),
+                    listener.accept(),
+                )
+                .await
+                {
                     Either::Left(_) => return,
                     Either::Right((Ok(mut connection), exit)) => {
                         exit_fut = Some(exit);
@@ -46,7 +52,10 @@ impl TobDeliverer {
                         }
                     }
                     Either::Right((Err(e), _)) => {
-                        error!("Error receiving TobRequest through tcp: {:?}", e);
+                        error!(
+                            "Error receiving TobRequest through tcp: {:?}",
+                            e
+                        );
                         return;
                     }
                 };
@@ -61,19 +70,23 @@ impl TobDeliverer {
                     Either::Right((Ok(res), exit)) => {
                         exit_fut = Some(exit);
 
-                        tx.send(res).await.expect("Sending TobRequest through channel failed");
+                        tx.send(res).await.expect(
+                            "Sending TobRequest through channel failed",
+                        );
                     }
                     Either::Right((Err(e), _)) => {
-                        error!("Error receiving TobRequest through tcp: {:?}", e);
+                        error!(
+                            "Error receiving TobRequest through tcp: {:?}",
+                            e
+                        );
                         return;
                     }
                 };
             }
-
         });
 
         Self {
-            receiver: rx,
+            receiver: Box::pin(rx),
             exit: Some(term),
         }
     }
@@ -85,8 +98,13 @@ impl Drop for TobDeliverer {
     }
 }
 
-impl TobDeliver for TobDeliverer {
-    fn stream(&self) -> &dyn Stream<Item=TobRequest> {
-        &self.receiver
+impl Stream for TobDeliverer {
+    type Item = TobRequest;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        self.receiver.as_mut().poll_next(cx)
     }
 }

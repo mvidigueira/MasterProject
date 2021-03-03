@@ -1,9 +1,7 @@
-mod solo_tob_server;
-mod solo_tob_deliverer;
 mod error;
-mod traits;
+mod solo_tob_deliverer;
+mod solo_tob_server;
 
-pub use error::{TobServerError, BroadcastError};
-pub use solo_tob_server::TobServer;
+pub use error::{BroadcastError, TobServerError};
 pub use solo_tob_deliverer::TobDeliverer;
-pub use traits::TobDeliver;
+pub use solo_tob_server::TobServer;
