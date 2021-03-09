@@ -1,10 +1,13 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use super::{BlsKeypair, BlsParams, BlsSigKey, BlsVerKey, BlsSignature, BlsSigInfo, BlsVerifySignatures};
+use super::{
+    BlsKeypair, BlsParams, BlsSigInfo, BlsSigKey, BlsSignature, BlsVerKey,
+    BlsVerifySignatures,
+};
 
 use drop::crypto::{
-    key::exchange::{Exchanger, PublicKey, KeyPair as CommKeyPair},
+    key::exchange::{Exchanger, KeyPair as CommKeyPair, PublicKey},
     Digest,
 };
 use drop::net::{
@@ -13,11 +16,12 @@ use drop::net::{
 
 use std::hash::{Hash, Hasher};
 
-use crate::utils::ModuleCache; 
 use super::{
-    memory_usage::MemoryReport, CoreNodeError, DataTree, ExecuteResult, HTree, Prefix, RecordID, RuleTransaction, PayloadForTob, TobRequest,
-    Touch, UserCoreRequest, UserCoreResponse, SystemConfig
+    memory_usage::MemoryReport, CoreNodeError, DataTree, ExecuteResult, HTree,
+    PayloadForTob, Prefix, RecordID, RuleTransaction, SystemConfig, TobRequest,
+    Touch, UserCoreRequest, UserCoreResponse,
 };
+use crate::utils::ModuleCache;
 use wasm_common_bindings::Ledger;
 use wasmer::{MemoryView, NativeFunc};
 
@@ -31,7 +35,6 @@ use tokio::task;
 
 use tracing::{error, info, trace_span};
 use tracing_futures::Instrument;
-
 
 const RECORD_LIMIT: usize = 400;
 
@@ -54,10 +57,7 @@ impl Hash for Info {
 impl Info {
     /// Create a new 'Info' from a 'DirectoryInfo' and a bls public key
     pub fn new(dir_info: DirectoryInfo, bls_pkey: BlsVerKey) -> Self {
-        Self {
-            dir_info,
-            bls_pkey,
-        }
+        Self { dir_info, bls_pkey }
     }
 
     /// Get the `DirectoryInfo` contained in this `Info`
@@ -141,7 +141,6 @@ impl CoreNode {
             }
             .instrument(trace_span!("tob_request_receiver")),
         );
-
 
         Ok(ret)
     }
@@ -511,16 +510,25 @@ impl ClientRequestHandler {
                     );
 
                     let d = if let Ok(output) = result.output.clone() {
-                        let p = PayloadForTob::new(result.rule_record_id.clone(), result.misc_digest.clone(), proof, output);
+                        let p = PayloadForTob::new(
+                            result.rule_record_id.clone(),
+                            result.misc_digest.clone(),
+                            proof,
+                            output,
+                        );
                         drop::crypto::hash(&p).unwrap()
                     } else {
                         drop::crypto::hash(&result).unwrap()
                     };
 
-                    let bls_signature = BlsSignature::new(d.as_ref(), &self.bls_sk);
+                    let bls_signature =
+                        BlsSignature::new(d.as_ref(), &self.bls_sk);
 
                     self.connection
-                        .send(&UserCoreResponse::Execute((result, bls_signature.into())))
+                        .send(&UserCoreResponse::Execute((
+                            result,
+                            bls_signature.into(),
+                        )))
                         .await?;
                 }
             }
@@ -540,16 +548,31 @@ struct TobRequestHandler<T> {
     data: ProtectedTree,
 }
 
-impl<T> TobRequestHandler<T> 
-where T: Stream<Item = TobRequest> + Unpin {
+impl<T> TobRequestHandler<T>
+where
+    T: Stream<Item = TobRequest> + Unpin,
+{
     fn new(config: SharedConfig, tob_stream: T, data: ProtectedTree) -> Self {
-        Self { config, tob_stream, data }
+        Self {
+            config,
+            tob_stream,
+            data,
+        }
     }
 
-    fn validate_sigs(config: &SharedConfig, payload: &PayloadForTob, sig_info: &BlsSigInfo) -> bool {
+    fn validate_sigs(
+        config: &SharedConfig,
+        payload: &PayloadForTob,
+        sig_info: &BlsSigInfo,
+    ) -> bool {
         let mut nodes = config.get_group_covering(payload.rule_id());
         nodes.sort_by(|x, y| x.dir_info().public().cmp(&y.dir_info().public()));
-        let ver_keys: Vec<&BlsVerKey> = nodes.drain(..).enumerate().filter(|(i,_)| sig_info.mask()[*i] == true).map(|(_, k)| k.bls_public()).collect();
+        let ver_keys: Vec<&BlsVerKey> = nodes
+            .drain(..)
+            .enumerate()
+            .filter(|(i, _)| sig_info.mask()[*i] == true)
+            .map(|(_, k)| k.bls_public())
+            .collect();
         let pk = BlsVerifySignatures::from_verkeys(ver_keys);
 
         let params = BlsParams::new("some publicly known string".as_bytes());
@@ -559,12 +582,13 @@ where T: Stream<Item = TobRequest> + Unpin {
     }
 
     async fn serve(mut self) -> Result<(), CoreNodeError> {
-
         while let Some(txr) = self.tob_stream.next().await {
             match txr {
                 TobRequest::Apply((req, sig)) => {
                     if !Self::validate_sigs(&self.config, &req, &sig) {
-                        let cause = format!("Error processing transaction: invalid signatures");
+                        let cause = format!(
+                            "Error processing transaction: invalid signatures"
+                        );
                         error!("{}", cause);
                         continue;
                     }
@@ -574,19 +598,15 @@ where T: Stream<Item = TobRequest> + Unpin {
 
                     let mut tree_guard = self.data.write().await;
 
-                    if !tree_guard.consistent_given_records(
-                        req.proof(),
-                        &touched_records,
-                    ) {
+                    if !tree_guard
+                        .consistent_given_records(req.proof(), &touched_records)
+                    {
                         let cause = format!("Error processing transaction: invalid merkle proof");
                         error!("{}", cause);
                         continue;
                     }
 
-                    tree_guard.merge_consistent(
-                        req.proof(),
-                        &touched_records,
-                    );
+                    tree_guard.merge_consistent(req.proof(), &touched_records);
 
                     for (k, t) in req.output().iter() {
                         match t {
@@ -619,17 +639,15 @@ where T: Stream<Item = TobRequest> + Unpin {
         }
 
         info!("End of TOB stream task");
-        
+
         Ok(())
     }
 }
 
 #[cfg(test)]
 mod test {
+    use super::super::{DataTree, UserCoreRequest, UserCoreResponse};
     use crate::utils::test::*;
-    use super::super::{
-        DataTree, UserCoreRequest, UserCoreResponse,
-    };
     extern crate test;
     use super::*;
     // use test::Bencher;
@@ -637,9 +655,9 @@ mod test {
 
     use rand::thread_rng;
 
+    use crate::single_server_tob::TobDeliverer;
     use tracing::trace_span;
     use tracing_futures::Instrument;
-    use crate::tob::TobDeliverer;
 
     #[tokio::test]
     async fn corenode_shutdown() {
@@ -654,13 +672,18 @@ mod test {
         let mut rng = thread_rng();
         let bls_kp = BlsKeypair::new(&mut rng, &params);
 
-        let deliverer = TobDeliverer::new(next_test_ip4(), Exchanger::random(), fake_tob_info.public().clone()).await;
+        let deliverer = TobDeliverer::new(
+            next_test_ip4(),
+            Exchanger::random(),
+            fake_tob_info.public().clone(),
+        )
+        .await;
         let (exit_tx, handle, _) = setup_corenode(
             next_test_ip4(),
             CommKeyPair::random(),
             bls_kp,
             deliverer,
-            SystemConfig::new(vec!()),
+            SystemConfig::new(vec![]),
             DataTree::new(),
             10,
             vec!["0"],
@@ -675,7 +698,7 @@ mod test {
         init_logger();
 
         let config =
-            SetupConfig::setup(get_balanced_prefixes(1), DataTree::new(), 10)
+            RunningConfig::setup(get_balanced_prefixes(1), DataTree::new(), 10)
                 .await;
 
         let mut connection =
@@ -704,7 +727,6 @@ mod test {
         config.tear_down().await;
     }
 
-    // move this test to integration tests or client
     #[tokio::test]
     async fn request_execute() {
         init_logger();
@@ -722,8 +744,7 @@ mod test {
         t.insert(rule_record_id.clone(), rule_buffer);
 
         let config =
-            SetupConfig::setup(get_balanced_prefixes(1), t.clone(), 10)
-                .await;
+            RunningConfig::setup(get_balanced_prefixes(1), t.clone(), 10).await;
 
         let mut c_node = create_peer_and_connect(&config.corenodes[0].2).await;
         let mut c_tob = create_peer_and_connect(&config.tob_info).await;
@@ -731,7 +752,10 @@ mod test {
         let local = c_node.local_addr().expect("getaddr failed");
 
         async move {
-            let txr = UserCoreRequest::GetProof(vec!["Alice".to_string(), "Bob".to_string()]);
+            let txr = UserCoreRequest::GetProof(vec![
+                "Alice".to_string(),
+                "Bob".to_string(),
+            ]);
             c_node.send(&txr).await.expect("send failed");
 
             let resp = c_node
@@ -740,8 +764,8 @@ mod test {
                 .expect("recv failed");
 
             let proof = match resp {
-               UserCoreResponse::GetProof((_, p)) => p,
-               _ => unreachable!(),
+                UserCoreResponse::GetProof((_, p)) => p,
+                _ => unreachable!(),
             };
 
             let args = ("Alice".to_string(), "Bob".to_string(), 50i32);
@@ -752,11 +776,13 @@ mod test {
                 vec!["Alice".to_string(), "Bob".to_string()],
                 &args,
             );
-    
+
             let txr: &UserCoreRequest = &UserCoreRequest::Execute(rt);
             c_node.send(&txr).await.expect("send failed");
-            let resp =
-                c_node.receive::<UserCoreResponse>().await.expect("recv failed");
+            let resp = c_node
+                .receive::<UserCoreResponse>()
+                .await
+                .expect("recv failed");
 
             let (_res, _bls_sig) = match resp {
                 UserCoreResponse::Execute(x) => x,
@@ -764,7 +790,7 @@ mod test {
             };
 
             // TODO: assert result and verify signature;
-            
+
             // assert_eq!(
             //     resp,
             //     UserCoreResponse::Execute((res, bls_sig)),
@@ -779,130 +805,4 @@ mod test {
 
         config.tear_down().await;
     }
-
-    // fn get_proof_for_records(data: &HTree, records: Vec<RecordID>) -> DataTree {
-    //     let mut t = data.get_validator();
-    //     for r in records {
-    //         match data.get_proof_with_placeholder(&r) {
-    //             Ok(proof) => {
-    //                 t.merge(&proof).unwrap();
-    //             }
-    //             Err(_) => (),
-    //         }
-    //     }
-
-    //     t
-    // }
-
-    // fn handle_execute(
-    //     htree: &mut HTree,
-    //     rt: &RuleTransaction,
-    // ) -> Result<(), CoreNodeError> {
-    //     let used_record_count: usize = rt.merkle_proof.len();
-    //     if used_record_count > RECORD_LIMIT {
-    //         panic!("Error processing transaction: record limit exceeded. Limit is {}, rule touches {}", RECORD_LIMIT, used_record_count);
-    //     }
-
-    //     if rt.touched_records.len() > RECORD_LIMIT {
-    //         panic!("Error processing transaction: record limit exceeded. Limit is {}, rule touches {}", RECORD_LIMIT, rt.touched_records.len());
-    //     }
-
-    //     if !htree
-    //         .consistent_given_records(&rt.merkle_proof, &rt.touched_records)
-    //     {
-    //         panic!("Error processing transaction: invalid merkle proof");
-    //     }
-
-    //     match rt.merkle_proof.get(&rt.rule_record_id) {
-    //         Err(_) => {
-    //             panic!("Error processing transaction: rule is missing from merkle proof");
-    //         }
-    //         Ok(bytes) => {
-    //             let mut contract = match WasmContract::load_bytes(bytes) {
-    //                 Err(e) => {
-    //                     panic!("Error processing transaction: error loading wasi contract: {:?}", e);
-    //                 }
-    //                 Ok(c) => c,
-    //             };
-
-    //             let args = rain_wasi_common::serialize_args_from_byte_vec(
-    //                 &rt.rule_arguments,
-    //             );
-
-    //             // removes (k,v) association of rule, for performance
-    //             let input_ledger: Ledger = rt
-    //                 .merkle_proof
-    //                 .clone_to_vec()
-    //                 .into_iter()
-    //                 .filter(|(k, _)| k != &rt.rule_record_id)
-    //                 .collect();
-
-    //             // Execute the transaction in the wasm runtime
-    //             let result =
-    //                 &contract.execute(input_ledger.serialize_wasi(), args);
-
-    //             // // Execute the transaction in the wasm runtime
-    //             // let result =
-    //             //     &self.simulate_transaction(input_ledger.serialize_wasi(), args);
-
-    //             // Extract the result
-    //             let _ = match rain_wasi_common::extract_result(result) {
-    //                 Err(e) => {
-    //                     panic!("Error processing transaction: contract output an error: {}", e);
-    //                 }
-    //                 Ok(l) => l,
-    //             };
-
-    //             htree.merge_consistent(&rt.merkle_proof, &rt.touched_records);
-    //         }
-    //     }
-
-    //     Ok(())
-    // }
-
-    // #[bench]
-    // fn bench_handle_execute(b: &mut Bencher) {
-    //     let filename =
-    //         "contract_test/target/wasm32-wasi/release/contract_test.wasm";
-    //     let rule_buffer =
-    //         std::fs::read(filename).expect("could not load file into buffer");
-
-    //     let mut t = DataTree::new();
-    //     let records = [
-    //         "Alice", "Bob", "Charlie", "Dave", "Aaron", "Vanessa", "Justin",
-    //         "Irina",
-    //     ];
-    //     for &k in records.iter() {
-    //         t.insert(String::from(k), (1000i32).to_be_bytes().to_vec());
-    //     }
-    //     t.insert("transfer_rule".to_string(), rule_buffer);
-
-    //     let mut h_tree = HistoryTree::new(
-    //         5,
-    //         vec![]
-    //     );
-
-    //     for (k, v) in t.clone_to_vec().drain(..) {
-    //         h_tree.add_touch(&k);
-    //         h_tree.insert(k, v);
-    //     }
-    //     h_tree.push_history();
-
-    //     let records = vec![
-    //         "Alice".to_string(),
-    //         "Bob".to_string(),
-    //     ];
-
-    //     let proof = get_proof_for_records(&h_tree, records.clone());
-    //     let args = ("Alice".to_string(), "Bob".to_string(), 50i32);
-
-    //     let rt = RuleTransaction::new(
-    //         proof,
-    //         "transfer_rule".to_string(),
-    //         records,
-    //         &args,
-    //     );
-
-    //     b.iter(|| handle_execute(&mut h_tree, &rt));
-    // }
 }

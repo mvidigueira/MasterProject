@@ -303,7 +303,7 @@ mod test {
         t.insert("Charlie".to_string(), vec![2u8]);
 
         let config =
-            SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 10)
+            RunningConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 10)
                 .await;
 
         let tob_info = &config.tob_info;
@@ -357,7 +357,7 @@ mod test {
         t.insert(rule_record_id.clone(), rule_buffer);
 
         let config =
-            SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 10)
+            RunningConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 10)
                 .await;
 
         let corenodes_config = &config.corenodes_config;
@@ -433,7 +433,7 @@ mod test {
         t.insert(rule_record_id.clone(), rule_buffer);
 
         let config =
-            SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 10)
+            RunningConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 10)
                 .await;
         let corenodes_config = &config.corenodes_config;
         let tob_info = &config.tob_info;
@@ -542,7 +542,7 @@ mod test {
         t.insert(rule_record_id.clone(), rule_buffer);
 
         let config =
-            SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 10)
+            RunningConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 10)
                 .await;
         let corenodes_config = &config.corenodes_config;
         let tob_info = &config.tob_info;
@@ -638,7 +638,7 @@ mod test {
         t.insert(rule_record_id.clone(), rule_buffer);
 
         let config =
-            SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 2)
+            RunningConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 2)
                 .await;
         let corenodes_config = &config.corenodes_config;
         let tob_info = &config.tob_info;
@@ -775,7 +775,7 @@ mod test {
         t.insert(rule_record_id.clone(), rule_buffer);
 
         // Setup a tob which only broadcasts to one of the nodes
-        let config = SetupConfig::setup_asymetric(
+        let config = RunningConfig::setup_asymetric(
             get_balanced_prefixes(nr_peer),
             1,
             t.clone(),
@@ -901,7 +901,7 @@ mod test {
         t.insert(rule_record_id.clone(), rule_buffer);
 
         let config =
-            SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 2)
+            RunningConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 2)
                 .await;
         let corenodes_config = &config.corenodes_config;
         let tob_info = &config.tob_info;
@@ -958,7 +958,7 @@ mod test {
         t.insert(rule_record_id.clone(), rule_buffer);
 
         let config =
-            SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 3)
+            RunningConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 3)
                 .await;
         let corenodes_config = &config.corenodes_config;
         let tob_info = &config.tob_info;
@@ -1072,7 +1072,7 @@ mod test {
         t.insert(rule_record_id.clone(), rule_buffer);
 
         let config =
-            SetupConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 20)
+            RunningConfig::setup(get_balanced_prefixes(nr_peer), t.clone(), 20)
                 .await;
         let corenodes_config = &config.corenodes_config;
         let tob_info = &config.tob_info;

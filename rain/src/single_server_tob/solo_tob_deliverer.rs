@@ -11,7 +11,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::{pin, task};
 use tracing::error;
 
-use futures::{Stream, task::Context, task::Poll};
+use futures::{task::Context, task::Poll, Stream};
 
 pub struct TobDeliverer {
     receiver: Pin<Box<mpsc::Receiver<TobRequest>>>,

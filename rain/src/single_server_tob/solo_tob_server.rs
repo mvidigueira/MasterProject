@@ -202,12 +202,10 @@ mod test {
     async fn tob_shutdown() {
         init_logger();
 
-        let (exit_dir, handle_dir, _) = setup_dir(next_test_ip4()).await;
         let (exit_tob, handle_tob, _) =
             setup_tob(next_test_ip4(), Exchanger::random(), vec![]).await;
 
         wait_for_server(exit_tob, handle_tob).await;
-        wait_for_server(exit_dir, handle_dir).await;
     }
 
     #[tokio::test]
@@ -215,7 +213,7 @@ mod test {
         init_logger();
 
         let config =
-            SetupConfig::setup(get_balanced_prefixes(1), DataTree::new(), 10)
+            RunningConfig::setup(get_balanced_prefixes(1), DataTree::new(), 10)
                 .await;
 
         let mut connection = create_peer_and_connect(&config.tob_info).await;
