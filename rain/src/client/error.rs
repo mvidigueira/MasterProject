@@ -1,20 +1,37 @@
-use drop::error::Error;
 use drop::net::{ConnectError, ReceiveError, SendError};
 use macros::error;
 use merkle::MerkleError;
+use thiserror::Error;
 
-error! {
-    type: ReplyError,
-    description: "reply does not follow protocol"
-}
+#[derive(Error, Debug)]
+pub enum ClientError {
+    #[error("reply does not follow protocol")]
+    ReplyError,
 
-error! {
-    type: InconsistencyError,
-    description: "merkle trees are not consistent"
-}
+    #[error("merkle trees are not consistent")]
+    InconsistencyError,
 
-error! {
-    type: ClientError,
-    causes: (ConnectError, SendError, ReceiveError, ReplyError, MerkleError, InconsistencyError),
-    description: "client failure"
+    #[error("Client Error: {source}")]
+    ConnectError {
+        #[from]
+        source: ConnectError,
+    },
+
+    #[error("Client Error: {source}")]
+    SendError {
+        #[from]
+        source: SendError,
+    },
+
+    #[error("Client Error: {source}")]
+    ReceiveError {
+        #[from]
+        source: ReceiveError,
+    },
+
+    #[error("Client Error: {source}")]
+    MerkleError {
+        #[from]
+        source: MerkleError,
+    },
 }

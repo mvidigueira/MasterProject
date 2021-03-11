@@ -11,7 +11,7 @@ use drop::crypto::{
     Digest,
 };
 use drop::net::{
-    Connection, DirectoryInfo, Listener, ListenerError, TcpListener,
+    Connection, DirectoryInfo, Listener, TcpListener,
 };
 
 use std::hash::{Hash, Hasher};
@@ -25,7 +25,10 @@ use crate::utils::ModuleCache;
 use wasm_common_bindings::Ledger;
 use wasmer::{MemoryView, NativeFunc};
 
-use futures::future::{self, Either};
+use futures::{
+    select,
+    FutureExt,
+};
 use futures::stream::StreamExt;
 use futures::Stream;
 
@@ -147,27 +150,26 @@ impl CoreNode {
 
     // handle this better, don't use an all encompassing error
     pub async fn serve(mut self) -> Result<(), CoreNodeError> {
-        let mut exit_fut = Some(self.exit);
+        let mut exit = self.exit.fuse();
 
         loop {
-            let (exit, connection) = match Self::poll_incoming(
-                &mut self.listener,
-                exit_fut.take().unwrap(),
-            )
-            .await
-            {
-                PollResult::Error(e) => {
-                    error!("failed to accept incoming connection: {}", e);
-                    return Err(e.into());
-                }
-                PollResult::Exit => {
+            let connection = select! {
+                _ = exit => {
                     info!("directory server exiting...");
                     return Ok(());
                 }
-                PollResult::Incoming(exit, connection) => (exit, connection),
+                a = self.listener.accept().fuse() => {
+                    match a {
+                        Err(e) => {
+                            error!("failed to accept incoming connection: {}", e);
+                            continue;
+                        },
+                        Ok(connection) => {
+                            connection
+                        }
+                    } 
+                }
             };
-
-            exit_fut = Some(exit);
 
             let peer_pub = connection.remote_key();
             let data = self.data.clone();
@@ -207,25 +209,6 @@ impl CoreNode {
             bls_pkey: self.bls_kp.ver_key.clone(),
         }
     }
-
-    async fn poll_incoming(
-        listener: &mut TcpListener,
-        exit: Receiver<()>,
-    ) -> PollResult {
-        match future::select(exit, listener.accept()).await {
-            Either::Left(_) => PollResult::Exit,
-            Either::Right((Ok(connection), exit)) => {
-                PollResult::Incoming(exit, connection)
-            }
-            Either::Right((Err(e), _)) => PollResult::Error(e),
-        }
-    }
-}
-
-enum PollResult {
-    Incoming(Receiver<()>, Connection),
-    Error(ListenerError),
-    Exit,
 }
 
 struct ClientRequestHandler {
@@ -251,10 +234,49 @@ impl ClientRequestHandler {
     }
 
     async fn handle_get_proof(
-        guard: tokio::sync::RwLockReadGuard<'_, HTree>,
+        data: &mut ProtectedTree,
         connection: &mut Connection,
         records: Vec<RecordID>,
     ) -> Result<(), CoreNodeError> {
+        let guard = data.read().await;
+
+        let mut t = guard.get_validator();
+
+        for r in records {
+            match guard.get_proof_with_placeholder(&r) {
+                Ok(proof) => {
+                    t.merge(&proof).unwrap();
+                }
+                Err(_) => (),
+            }
+        }
+
+        let history_count = guard.history_count;
+
+        drop(guard);
+
+        connection
+            .send(&UserCoreResponse::GetProof((history_count, t)))
+            .await?;
+
+        Ok(())
+    }
+
+    async fn handle_get_proof_subscription(
+        data: &mut ProtectedTree,
+        connection: &mut Connection,
+        records: Vec<RecordID>,
+        since: usize,
+    ) -> Result<(), CoreNodeError> {
+        let mut guard = data.write().await;
+        info!("Acquired lock");
+        let w = guard.subscribe(records.clone(), since);
+        drop(guard);
+        info!("Successfully subscribed!");
+
+        w.notified().await;
+        
+        let guard = data.read().await;
         let mut t = guard.get_validator();
 
         for r in records {
@@ -476,11 +498,25 @@ impl ClientRequestHandler {
             match txr {
                 UserCoreRequest::GetProof(records) => {
                     info!("Received getproof request. Arguments {:?}", records);
-                    let guard = self.data.read().await;
                     Self::handle_get_proof(
-                        guard,
+                        &mut self.data,
                         &mut self.connection,
                         records.clone(),
+                    )
+                    .await?;
+
+                    info!(
+                        "Replying to getproof request. Arguments {:?}",
+                        records
+                    );
+                }
+                UserCoreRequest::GetProofSubscribe((since, records)) => {
+                    info!("Received getproofsubscribe request. Arguments {:?}", records);
+                    Self::handle_get_proof_subscription(
+                        &mut self.data,
+                        &mut self.connection,
+                        records.clone(),
+                        since,
                     )
                     .await?;
 
@@ -673,9 +709,8 @@ mod test {
         let bls_kp = BlsKeypair::new(&mut rng, &params);
 
         let deliverer = TobDeliverer::new(
-            next_test_ip4(),
             Exchanger::random(),
-            fake_tob_info.public().clone(),
+            fake_tob_info,
         )
         .await;
         let (exit_tx, handle, _) = setup_corenode(

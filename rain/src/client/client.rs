@@ -1,6 +1,7 @@
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::Arc;
+use serde::Serialize;
 
 use drop::crypto::{key::exchange::Exchanger, Digest};
 use drop::net::{Connector, DirectoryInfo, TcpConnector};
@@ -8,16 +9,16 @@ use drop::net::{Connector, DirectoryInfo, TcpConnector};
 use crate::corenode::{
     BlsAggregateSignatures, BlsSigInfo, BlsSignature, CoreNodeInfo, DataTree,
     ExecuteResult, HistoryTree, PayloadForTob, RecordID, RuleTransaction,
-    SystemConfig, TobRequest, TobResponse, Touch, UserCoreRequest,
+    SystemConfig, TobRequest, Touch, UserCoreRequest,
     UserCoreResponse,
 };
 
-use super::{ClientError, InconsistencyError, ReplyError};
+use super::{ClientError};
 
 use futures::future::{self, FutureExt};
 use std::future::Future;
 
-use tracing::error;
+use tracing::{error, info};
 
 pub struct ClientNode {
     corenodes_config: SystemConfig<Arc<CoreNodeInfo>>,
@@ -46,15 +47,31 @@ impl ClientNode {
     pub async fn get_merkle_proofs(
         &self,
         records: Vec<RecordID>,
-    ) -> Result<DataTree, ClientError> {
+    ) -> Result<(usize, DataTree), ClientError> {
+        self.get_merkle_proofs_since(
+            records,
+            None,
+        ).await
+    }
+
+    pub async fn get_merkle_proofs_since(
+        &self,
+        records: Vec<RecordID>,
+        since: Option<usize>,
+    ) -> Result<(usize, DataTree), ClientError> {
         let mut m = self.corenodes_config.assignments(&records);
 
-        let txr: &UserCoreRequest = &records.clone().into();
+        let txr: UserCoreRequest = if let Some(i) = since {
+            (i, records.clone()).into()
+        } else {
+            records.clone().into()
+        };
+        let t = &txr;
 
         let mut results =
             future::join_all(m.drain().map(|(k, v)| async move {
                 // change joinall to tolerate non-reponding nodes
-                (v, self.get_merkle_proof(k.dir_info(), txr).await)
+                (v, self.get_merkle_proof(k.dir_info(), t).await)
             }))
             .await;
 
@@ -83,11 +100,11 @@ impl ClientNode {
                 HistoryTree::merge_consistent_trees(&mut base, &t, &records, 0);
             } else {
                 error!("Inconsistency detected between proofs when collecting");
-                return Err(InconsistencyError::new().into());
+                return Err(ClientError::InconsistencyError{});
             }
         }
 
-        Ok(base)
+        Ok((max, base))
     }
 
     async fn get_merkle_proof(
@@ -108,10 +125,12 @@ impl ClientNode {
             .await?;
 
         connection.send(records).await?;
+        info!("Awaiting response");
         let resp = connection.receive::<UserCoreResponse>().await?;
+        info!("Received response!");
         match resp {
             UserCoreResponse::GetProof(proof) => Ok(proof),
-            _ => return Err(ReplyError::new().into()),
+            _ => return Err(ClientError::ReplyError{}),
         }
     }
 
@@ -145,7 +164,7 @@ impl ClientNode {
 
                 Ok((result, s))
             }
-            _ => Err(ReplyError::new().into()),
+            _ => Err(ClientError::ReplyError{}),
         }
     }
 
@@ -220,7 +239,7 @@ impl ClientNode {
 
     // Sends a request to execute to all corenodes responsible for running this rule
     // Currently blocks if any of the nodes fail to reply (TO FIX)
-    pub async fn send_execution_requests<T: classic::Serialize>(
+    pub async fn send_execution_requests<T: Serialize>(
         &self,
         proof: DataTree,
         rule: RecordID,
@@ -273,8 +292,6 @@ impl ClientNode {
 
         connection.send(&txr).await?;
 
-        connection.receive::<TobResponse>().await?;
-
         Ok(())
     }
 }
@@ -315,7 +332,7 @@ mod test {
 
             debug!("client node created");
 
-            let proof = client_node
+            let (_, proof) = client_node
                 .get_merkle_proofs(vec![
                     "Alan".to_string(),
                     "Bob".to_string(),
@@ -369,7 +386,7 @@ mod test {
 
             debug!("client node created");
 
-            let proof = client_node
+            let (epoch, proof) = client_node
                 .get_merkle_proofs(vec!["Alice".to_string(), "Bob".to_string()])
                 .await
                 .expect("merkle proof error");
@@ -397,10 +414,13 @@ mod test {
                 .expect("client error when sending apply request");
 
             // info!("Awaiting");
-            // let _ = timeout(Duration::from_millis(2000), future::pending::<()>()).await;
+            let _ = timeout(Duration::from_millis(1000), future::pending::<()>()).await;
 
-            let result = client_node
-                .get_merkle_proofs(vec!["Alice".to_string(), "Bob".to_string()])
+            let (_, result) = client_node
+                .get_merkle_proofs_since(
+                    vec!["Alice".to_string(), "Bob".to_string()],
+                    Some(epoch+1),
+                )
                 .await
                 .expect("merkle proof error");
 
@@ -445,12 +465,12 @@ mod test {
             let client_node_2 = ClientNode::new(tob_info, corenodes_config)
                 .expect("client node 2 creation failed");
 
-            let proof_1 = client_node_1
+            let (epoch_1, proof_1) = client_node_1
                 .get_merkle_proofs(vec!["Alice".to_string(), "Bob".to_string()])
                 .await
                 .expect("merkle proof error");
 
-            let proof_2 = client_node_2
+            let (epoch_2, proof_2) = client_node_2
                 .get_merkle_proofs(vec![
                     "Charlie".to_string(),
                     "Dave".to_string(),
@@ -500,13 +520,18 @@ mod test {
                 .await
                 .expect("client error when sending apply request");
 
-            let result = client_node_1
-                .get_merkle_proofs(vec![
-                    "Alice".to_string(),
-                    "Bob".to_string(),
-                    "Charlie".to_string(),
-                    "Dave".to_string(),
-                ])
+            //tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
+
+            let (_, result) = client_node_1
+                .get_merkle_proofs_since(
+                    vec![
+                        "Alice".to_string(),
+                        "Bob".to_string(),
+                        "Charlie".to_string(),
+                        "Dave".to_string(),
+                        ],
+                    Some(epoch_1+2)
+                )
                 .await
                 .expect("merkle proof error");
 
@@ -554,7 +579,7 @@ mod test {
             let client_node_2 = ClientNode::new(tob_info, corenodes_config)
                 .expect("client node 2 creation failed");
 
-            let proof = client_node_1
+            let (epoch, proof) = client_node_1
                 .get_merkle_proofs(vec![
                     "Alice".to_string(),
                     "Bob".to_string(),
@@ -601,8 +626,11 @@ mod test {
                 .await;
             res.output.expect_err("Expected an error processing transaction due to the invalidated merkle proof");
 
-            let result = client_node_1
-                .get_merkle_proofs(vec!["Alice".to_string(), "Bob".to_string()])
+            let (_, result) = client_node_1
+                .get_merkle_proofs_since(
+                    vec!["Alice".to_string(), "Bob".to_string()],
+                    Some(epoch+1),
+                )
                 .await
                 .expect("merkle proof error");
 
@@ -615,7 +643,7 @@ mod test {
         config.tear_down().await;
     }
 
-    #[tokio::test(threaded_scheduler)]
+    #[tokio::test(flavor = "multi_thread")]
     async fn request_in_ancient_history() {
         init_logger();
         let nr_peer = 3;
@@ -647,7 +675,7 @@ mod test {
             let client_node_1 = ClientNode::new(tob_info, corenodes_config)
                 .expect("client node 1 creation failed");
 
-            let proof_1 = client_node_1
+            let (epoch_1, proof_1) = client_node_1
                 .get_merkle_proofs(vec!["Alice".to_string(), "Bob".to_string()])
                 .await
                 .expect("merkle proof error");
@@ -673,10 +701,7 @@ mod test {
                 .await
                 .expect("client error when sending apply request");
 
-            let _ =
-                timeout(Duration::from_secs(2), future::pending::<()>()).await;
-
-            let proof_1 = client_node_1
+            let (epoch_2, proof_1) = client_node_1
                 .get_merkle_proofs(vec![
                     "Charlie".to_string(),
                     "Dave".to_string(),
@@ -708,8 +733,8 @@ mod test {
             let _ =
                 timeout(Duration::from_secs(2), future::pending::<()>()).await;
 
-            let result = client_node_1
-                .get_merkle_proofs(
+            let (_, result) = client_node_1
+                .get_merkle_proofs_since(
                     [
                         "Alice", "Bob", "Charlie", "Dave", "Aaron", "Vanessa",
                         "Justin", "Irina",
@@ -717,6 +742,7 @@ mod test {
                     .iter()
                     .map(|x| String::from(*x))
                     .collect(),
+                    Some(epoch_2+1),
                 )
                 .await
                 .expect("merkle proof error");
@@ -751,7 +777,7 @@ mod test {
         config.tear_down().await;
     }
 
-    #[tokio::test(threaded_scheduler)]
+    #[tokio::test(flavor = "multi_thread")]
     async fn mixed_get_proofs() {
         init_logger();
         let nr_peer = 3;
@@ -789,7 +815,7 @@ mod test {
             let client_node_1 = ClientNode::new(tob_info, corenodes_config)
                 .expect("client node 1 creation failed");
 
-            let proof_1 = client_node_1
+            let (_, proof_1) = client_node_1
                 .get_merkle_proofs(vec!["Alice".to_string(), "Bob".to_string()])
                 .await
                 .expect("merkle proof error");
@@ -808,7 +834,7 @@ mod test {
             let _ =
                 timeout(Duration::from_secs(5), future::pending::<()>()).await;
 
-            let proof_1 = client_node_1
+            let (_, proof_1) = client_node_1
                 .get_merkle_proofs(vec![
                     "Charlie".to_string(),
                     "Dave".to_string(),
@@ -830,7 +856,7 @@ mod test {
             let _ =
                 timeout(Duration::from_secs(5), future::pending::<()>()).await;
 
-            let proof_1 = client_node_1
+            let (_, proof_1) = client_node_1
                 .get_merkle_proofs(vec![
                     "Aaron".to_string(),
                     "Vanessa".to_string(),
@@ -852,7 +878,7 @@ mod test {
             let _ =
                 timeout(Duration::from_secs(5), future::pending::<()>()).await;
 
-            let proof_1 = client_node_1
+            let (_, proof_1) = client_node_1
                 .get_merkle_proofs(vec![
                     "Justin".to_string(),
                     "Irina".to_string(),
@@ -970,7 +996,7 @@ mod test {
             debug!("client node created");
 
             for _ in 0..4 {
-                let proof = client_node
+                let (epoch, proof) = client_node
                     .get_merkle_proofs(vec![
                         1.to_string(),
                         rule_record_id.clone(),
@@ -999,7 +1025,7 @@ mod test {
                     .await;
 
             for _ in 0..1 {
-                let proof = client_node
+                let (epoch, proof) = client_node
                     .get_merkle_proofs(vec![
                         2.to_string(),
                         rule_record_id.clone(),
@@ -1024,7 +1050,7 @@ mod test {
             }
 
             for _ in 0..4 {
-                let proof = client_node
+                let (epoch, proof) = client_node
                     .get_merkle_proofs(vec![
                         1.to_string(),
                         rule_record_id.clone(),
@@ -1089,7 +1115,7 @@ mod test {
             for _ in 0..100i32 {
                 nums.shuffle(&mut rng);
                 let n = nums[0];
-                let proof = client_node
+                let (epoch, proof) = client_node
                     .get_merkle_proofs(vec![
                         n.to_string(),
                         rule_record_id.clone(),
@@ -1118,7 +1144,7 @@ mod test {
                     .await;
 
             let v: Vec<String> = (0..1000i32).map(|n| n.to_string()).collect();
-            let proof_final = client_node
+            let (epoch, proof_final) = client_node
                 .get_merkle_proofs(v.clone())
                 .await
                 .expect("merkle proof error");

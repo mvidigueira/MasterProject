@@ -16,7 +16,7 @@ pub use prefix::SystemConfig;
 
 pub use comm_structs::{
     get_misc_digest, BlsSigInfo, BlsSigWrapper, ExecuteResult, PayloadForTob,
-    RuleTransaction, TobRequest, TobResponse, Touch, UserCoreRequest,
+    RuleTransaction, TobRequest, Touch, UserCoreRequest,
     UserCoreResponse,
 };
 

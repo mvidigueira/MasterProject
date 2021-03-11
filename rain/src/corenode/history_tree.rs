@@ -2,6 +2,7 @@ use merkle::MerkleError;
 use merkle::Tree;
 
 use std::borrow::Borrow;
+
 use std::collections::VecDeque;
 
 use drop::crypto::Digest;
@@ -16,6 +17,41 @@ use tracing::error;
 
 use super::Prefix;
 use std::fmt::Debug;
+use tokio::sync::Notify;
+
+use tracing::info;
+
+pub struct WaitingFor<K> {
+    notifier: Arc<Notify>,
+    interesting_records: Vec<K>,
+    min_epoch: usize,
+}
+
+impl<K> WaitingFor<K> {
+    pub fn new(records: Vec<K>, min_epoch: usize) -> Self {
+        Self {
+            notifier: Arc::new(Notify::new()),
+            interesting_records: records,
+            min_epoch: min_epoch,
+        }
+    }
+
+    pub fn notify(&self) {
+        self.notifier.notify_one();
+    }
+
+    pub fn get_notify(&self) -> Arc<Notify> {
+        Arc::clone(&self.notifier)
+    }
+
+    pub fn records(&self) -> &Vec<K> {
+        &self.interesting_records
+    }
+
+    pub fn min_epoch(&self) -> usize {
+        self.min_epoch
+    }
+}
 
 pub struct HistoryTree<K, V>
 where
@@ -44,6 +80,8 @@ where
     // The list of prefixes covered by this tree. Records under these prefixes can
     // always be retrieved from the tree (never replaced with placeholders).
     pub prefix_list: Vec<Prefix>,
+
+    notifications: Vec<WaitingFor<K>>,
 }
 
 impl<K, V> HistoryTree<K, V>
@@ -70,6 +108,8 @@ where
             history_len: history_len,
 
             prefix_list: prefix_list,
+
+            notifications: vec!(),
         }
     }
 
@@ -398,14 +438,90 @@ where
 
     // "Closes" a transaction.
     pub fn push_history(&mut self) {
+        self.history_count += 1;
+        self.try_notify_subscribers();
+        
         if self.history.len() == self.history_len {
             self.history.pop_back();
             self.pop_touches();
         }
         self.history.push_front(self.tree.root_hash());
         self.touches.push_front(vec![]);
+        
+    }
 
-        self.history_count += 1;
+    fn try_notify_subscribers(&mut self) {
+        let mut indices = vec!();
+        for (i, w) in self.notifications.iter().enumerate() {
+            if w.min_epoch() <= self.history_count {
+                if self.check_subscribe_latest(w) {
+                    indices.push(i);
+                }
+
+            }
+        }
+        for i in indices.iter().rev() {
+            self.notifications.swap_remove(*i);
+        }
+    }
+
+    fn check_subscribe_latest(&self, w: &WaitingFor<K>) -> bool {
+        for r2 in self.touches.front().unwrap() {
+            for r1 in w.records() {
+                if *r1 == **r2 {
+                    w.notify();
+                    return true;
+                }
+            }
+        };
+        false
+    }
+
+    pub fn subscribe(&mut self, interested_records: Vec<K>, min_epoch: usize) -> Arc<Notify> {
+        let w = WaitingFor::new(interested_records, min_epoch);
+        let r = w.get_notify();
+        if !self.check_subscribe_since_min_epoch(&w) {
+            info!("pushed notification");
+            self.notifications.push(w);
+        }
+
+        r
+    }
+
+    // checks if one of the records in WaitingFor has been touched since the min epoch
+    fn check_subscribe_since_min_epoch(&self, w: &WaitingFor<K>) -> bool {
+        info!("checking subscribe since min epoch");
+        let lower_limit = if self.history_count < w.min_epoch() {
+            0
+        } else {
+            self.history_count - w.min_epoch()
+        };
+        if w.min_epoch() > self.history_count {
+            // No new touches possible
+            return false;
+        } else if w.min_epoch() < lower_limit {
+            // The request (min_epoch) is very old and we 
+            // have already  deleted crucial information.
+            // We err on the safe side and return true to unblock the task.
+            return true;
+        }
+
+        // TODO: check that range is good (+- 1)
+        info!("lower_limit + 2: {}", lower_limit + 2);
+        for i in 1..lower_limit + 2  {
+            let l = &self.touches[i];
+            info!("touches: {:?}", l);
+            for r2 in l.iter() {
+                for r1 in w.records() {
+                    if *r1 == **r2 {
+                        w.notify();
+                        return true;
+                    }
+                }
+            };
+        }
+
+        false
     }
 }
 

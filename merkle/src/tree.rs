@@ -261,6 +261,14 @@ where
         self.root.get(k, 0)
     }
 
+    pub fn get_count<Q: ?Sized>(&self, k: &Q) -> Result<&usize, MerkleError> 
+    where
+        K: Borrow<Q>,
+        Q: Serialize + Eq,
+    {
+        self.root.get_count(k, 0)
+    }
+
     /// Inserts a key-value pair into the tree.
     ///
     /// If the tree did not have this key present, [`None`] is returned.

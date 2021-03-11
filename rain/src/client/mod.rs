@@ -1,6 +1,6 @@
 mod client;
 mod error;
 
-pub use error::{ClientError, InconsistencyError, ReplyError};
+pub use error::{ClientError};
 
 pub use client::ClientNode;

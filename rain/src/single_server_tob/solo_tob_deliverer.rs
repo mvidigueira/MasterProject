@@ -1,92 +1,87 @@
-use drop::crypto::key::exchange::{Exchanger, PublicKey};
-use drop::net::{Listener, TcpListener};
-use std::net::SocketAddr;
+use drop::crypto::key::exchange::{Exchanger};
+use drop::net::{TcpConnector, Connector, DirectoryInfo};
 use std::pin::Pin;
 
 use crate::corenode::TobRequest;
 
-use futures::future::{self, Either};
-
 use tokio::sync::{mpsc, oneshot};
-use tokio::{pin, task};
-use tracing::error;
+use tokio::{task};
+use tracing::{error, info};
 
 use futures::{task::Context, task::Poll, Stream};
+use tokio_stream::wrappers::ReceiverStream;
+
+use futures::{
+    select,
+    FutureExt,
+};
 
 pub struct TobDeliverer {
-    receiver: Pin<Box<mpsc::Receiver<TobRequest>>>,
+    receiver: Pin<Box<ReceiverStream<TobRequest>>>,
     exit: Option<oneshot::Sender<()>>,
 }
 
 impl TobDeliverer {
     pub async fn new(
-        addr: SocketAddr,
         exchanger: Exchanger,
-        tob_pub: PublicKey,
+        tob_info: DirectoryInfo,
     ) -> Self {
-        let mut listener = TcpListener::new(addr, exchanger.clone())
-            .await
-            .expect("listen failed");
+        let connector = TcpConnector::new(exchanger);
+        
 
-        let (mut tx, rx) = mpsc::channel::<TobRequest>(100);
+        let (tx, rx) = mpsc::channel::<TobRequest>(100);
         let (term, exit) = oneshot::channel();
 
         task::spawn(async move {
-            let mut exit_fut = Some(exit);
+            let mut exit = exit.fuse();
+            let addr = tob_info.addr();
 
-            let mut connection = loop {
-                match future::select(
-                    exit_fut.take().unwrap(),
-                    listener.accept(),
-                )
-                .await
-                {
-                    Either::Left(_) => return,
-                    Either::Right((Ok(mut connection), exit)) => {
-                        exit_fut = Some(exit);
-
-                        if Some(tob_pub) == connection.remote_key() {
-                            break connection;
-                        } else {
-                            let _ = connection.close().await;
-                        }
-                    }
-                    Either::Right((Err(e), _)) => {
-                        error!(
-                            "Error receiving TobRequest through tcp: {:?}",
-                            e
-                        );
+            loop {
+                let mut connection = select! {
+                    _ = exit => {
+                        info!("directory server exiting...");
                         return;
+                    }
+                    a = connector.connect(tob_info.public(), &addr).fuse() => {
+                        match a {
+                            Err(_) => continue,
+                            Ok(connection) => {
+                                info!("Established connection with tob");
+                                connection
+                            }
+                        } 
+                    }
+                };
+
+                loop {
+                    select! {
+                        _ = exit => {
+                            info!("directory server exiting...");
+                            return;
+                        }
+                        a = connection.receive::<TobRequest>().fuse() => {
+                            match a {
+                                Err(_) => {
+                                    error!("TobRequest receiving failed");
+                                    continue;
+                                }
+                                Ok(req) => {
+                                    if let Err(_) = tx.send(req).await {
+                                        error!("error sending request, receiver dropped");
+                                        return;
+                                    }
+                                    info!("Tob request received");
+                                }
+                            }
+                        }
                     }
                 };
             };
 
-            loop {
-                let fut = connection.receive();
-                pin!(fut);
-
-                match future::select(exit_fut.take().unwrap(), fut).await {
-                    Either::Left(_) => return,
-                    Either::Right((Ok(res), exit)) => {
-                        exit_fut = Some(exit);
-
-                        tx.send(res).await.expect(
-                            "Sending TobRequest through channel failed",
-                        );
-                    }
-                    Either::Right((Err(e), _)) => {
-                        error!(
-                            "Error receiving TobRequest through tcp: {:?}",
-                            e
-                        );
-                        return;
-                    }
-                };
-            }
         });
 
         Self {
-            receiver: Box::pin(rx),
+            receiver: Box::pin(ReceiverStream::new(rx)),
             exit: Some(term),
         }
     }

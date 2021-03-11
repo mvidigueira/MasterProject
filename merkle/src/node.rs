@@ -134,6 +134,39 @@ where
         }
     }
 
+    /// General function to find a leaf and return something associated to
+    /// k_digest must be the digest of k using `crypto::hash()`.
+    /// depth is the depth of the current node in the tree (between 0 and 255).
+    pub fn get_function<Q: ?Sized, F, T>(&self, k: &Q, depth: u32, function: &F) -> Result<&T, MerkleError>
+    where
+        K: Borrow<Q>,
+        Q: Serialize + Eq,
+        F: for<'a> Fn(&'a Leaf<K, V>) -> &'a T,
+    {
+        let d = crypto::hash(&k).unwrap();
+        self.get_internal_function(k, depth, &d, function)
+    }
+
+    fn get_internal_function<Q: ?Sized, F, T>(&self, k: &Q, depth: u32, k_digest: &Digest, function: &F) -> Result<&T, MerkleError>
+    where
+        K: Borrow<Q>,
+        Q: Serialize + Eq,
+        F: for<'a> Fn(&'a Leaf<K, V>) -> &'a T,
+    {
+        match self {
+            Node::Internal(i) => i.get_internal_function(k, depth, k_digest, function),
+            Node::Placeholder(ph) => Err(KeyBehindPlaceholder(ph.hash())),
+            Node::Leaf(l) => {
+                if l.k.borrow() == k {
+                    Ok(function(l))
+                } else {
+                    return Err(KeyNonExistant);
+                }
+            },
+            Node::Empty(_) => Err(KeyNonExistant),
+        }
+    }
+
     /// Tries to return the value associated to key k from the underlying tree.
     /// depth is the depth of the current node in the tree (between 0 and 255).
     ///
@@ -146,29 +179,23 @@ where
         K: Borrow<Q>,
         Q: Serialize + Eq,
     {
-        let d = crypto::hash(&k).unwrap();
-        self.get_internal(k, depth, &d)
+        self.get_function(k, depth, &Self::get_from_leaf)
     }
 
-    /// Tries to return the value associated to key k from the underlying tree.
-    /// k_digest must be the digest of k using `crypto::hash()`.
-    /// depth is the depth of the current node in the tree (between 0 and 255).
-    fn get_internal<Q: ?Sized>(
-        &self,
-        k: &Q,
-        depth: u32,
-        k_digest: &Digest,
-    ) -> Result<&V, MerkleError>
+    fn get_from_leaf(l: &Leaf<K, V>) -> &V {
+        l.value()
+    }
+
+    pub fn get_count<Q: ?Sized>(&self, k: &Q, depth: u32) -> Result<&usize, MerkleError>
     where
         K: Borrow<Q>,
         Q: Serialize + Eq,
     {
-        match self {
-            Node::Internal(i) => i.get_internal(k, depth, k_digest),
-            Node::Placeholder(ph) => Err(KeyBehindPlaceholder(ph.hash())),
-            Node::Leaf(l) => l.get_internal(k),
-            Node::Empty(_) => Err(KeyNonExistant),
-        }
+        self.get_function(k, depth, &Self::get_count_from_leaf)
+    }
+
+    fn get_count_from_leaf(l: &Leaf<K, V>) -> &usize {
+        &l.count
     }
 
     pub fn has_valid_key_positions(&self) -> bool {
@@ -634,18 +661,6 @@ where
         self.count = new_count;
     }
 
-    fn get_internal<Q: ?Sized>(&self, k: &Q) -> Result<&V, MerkleError>
-    where
-        K: Borrow<Q>,
-        Q: Serialize + Eq,
-    {
-        if self.k.borrow() == k {
-            Ok(self.value())
-        } else {
-            Err(KeyNonExistant)
-        }
-    }
-
     fn insert_internal(
         mut self,
         k: K,
@@ -817,15 +832,17 @@ where
         self.right().has_valid_key_positions_internal(current, depth+1)
     }
 
-    fn get_internal<Q: ?Sized>(
+    fn get_internal_function<Q: ?Sized, F, T>(
         &self,
         k: &Q,
         depth: u32,
         k_digest: &Digest,
-    ) -> Result<&V, MerkleError>
+        function: &F,
+    ) -> Result<&T, MerkleError>
     where
         K: Borrow<Q>,
         Q: Serialize + Eq,
+        F: for<'a> Fn(&'a Leaf<K, V>) -> &'a T, 
     {
         let side = if bit(k_digest.as_ref(), depth as u8) {
             &self.right
@@ -833,7 +850,7 @@ where
             &self.left
         };
 
-        side.as_ref().get_internal(k, depth + 1, k_digest)
+        side.as_ref().get_internal_function(k, depth + 1, k_digest, function)
     }
 
     fn extend_knowledge_internal<Q: ?Sized>(
@@ -1382,18 +1399,13 @@ mod tests {
     #[test]
     fn leaf_get_normal() {
         let base = Leaf::new("Alice", 0x00, 0);
+        let l: Node<_,_> = base.into();
 
-        let v = base.get_internal("Alice").unwrap();
+        let v = l.get("Alice", 0).unwrap();
         assert_eq!(*v, 0x00);
     }
 
-    #[test]
-    #[should_panic(expected = "KeyNonExistant")]
-    fn leaf_get_err_non_existant() {
-        let base = Leaf::new("Alice", 0x00, 0);
 
-        base.get_internal("Bob").unwrap();
-    }
 
     #[test]
     fn internal_get_normal() {

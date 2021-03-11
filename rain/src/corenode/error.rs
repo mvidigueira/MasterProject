@@ -1,10 +1,31 @@
-use drop::error::Error;
 use drop::net::{ListenerError, ReceiveError, SendError};
 use macros::error;
 use std::io::Error as IoError;
+use thiserror::Error;
 
-error! {
-    type: CoreNodeError,
-    causes: (IoError, ListenerError, SendError, ReceiveError),
-    description: "server failure"
+#[derive(Error, Debug)]
+pub enum CoreNodeError {
+    #[error("CoreNodeError Error: {source}")]
+    IoError {
+        #[from]
+        source: IoError,
+    },
+
+    #[error("Corenode Error:  {source}")]
+    ListenerError {
+        #[from]
+        source: ListenerError,
+    },
+
+    #[error("Corenode Error:  {source}")]
+    SendError {
+        #[from]
+        source: SendError,
+    },
+
+    #[error("Corenode Error:  {source}")]
+    ReceiveError {
+        #[from]
+        source: ReceiveError,
+    },
 }

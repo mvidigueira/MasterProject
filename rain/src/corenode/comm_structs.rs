@@ -1,15 +1,23 @@
 use super::{BlsSignature, DataTree, Digest, RecordID, RecordVal};
 use merkle::Tree;
+use serde::{Serialize, Deserialize};
 
 use std::hash::{Hash, Hasher};
 
 #[derive(
-    classic::Serialize, classic::Deserialize, Debug, Clone, Hash, PartialEq, Eq,
+    Serialize, Deserialize, Debug, Clone, Hash, PartialEq, Eq,
 )]
 pub enum UserCoreRequest {
     // Request from User to Corenode
+    GetProofSubscribe((usize, Vec<RecordID>)),
     GetProof(Vec<RecordID>),
     Execute(RuleTransaction),
+}
+
+impl From<(usize, Vec<RecordID>)> for UserCoreRequest {
+    fn from(v: (usize, Vec<RecordID>)) -> Self {
+        UserCoreRequest::GetProofSubscribe(v)
+    }
 }
 
 impl From<Vec<RecordID>> for UserCoreRequest {
@@ -17,11 +25,8 @@ impl From<Vec<RecordID>> for UserCoreRequest {
         UserCoreRequest::GetProof(v)
     }
 }
-unsafe impl Send for UserCoreRequest {}
-unsafe impl Sync for UserCoreRequest {}
-impl classic::Message for UserCoreRequest {}
 
-#[derive(classic::Serialize, classic::Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct BlsSigWrapper(BlsSignature);
 impl Eq for BlsSigWrapper {}
 impl Hash for BlsSigWrapper {
@@ -40,7 +45,7 @@ impl From<BlsSigWrapper> for BlsSignature {
     }
 }
 
-#[derive(classic::Serialize, classic::Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct BlsSigInfo {
     sig: BlsSignature,
     mask: Vec<bool>,
@@ -66,19 +71,15 @@ impl BlsSigInfo {
 }
 
 #[derive(
-    classic::Serialize, classic::Deserialize, Debug, Clone, Hash, PartialEq, Eq,
+    Serialize, Deserialize, Debug, Clone, Hash, PartialEq, Eq,
 )]
 pub enum UserCoreResponse {
     GetProof((usize, Tree<RecordID, RecordVal>)),
     Execute((ExecuteResult, BlsSigWrapper)),
 }
 
-unsafe impl Send for UserCoreResponse {}
-unsafe impl Sync for UserCoreResponse {}
-impl classic::Message for UserCoreResponse {}
-
 #[derive(
-    classic::Serialize, classic::Deserialize, Debug, Clone, Hash, PartialEq, Eq,
+    Serialize, Deserialize, Debug, Clone, Hash, PartialEq, Eq,
 )]
 pub struct ExecuteResult {
     pub rule_record_id: String,
@@ -92,7 +93,7 @@ pub fn get_misc_digest(rule_version: &Digest, args: &Vec<u8>) -> Digest {
 }
 
 #[derive(
-    classic::Serialize, classic::Deserialize, Debug, Clone, Hash, PartialEq, Eq,
+    Serialize, Deserialize, Debug, Clone, Hash, PartialEq, Eq,
 )]
 pub enum Touch {
     Read,
@@ -132,7 +133,7 @@ impl ExecuteResult {
 }
 
 #[derive(
-    classic::Serialize, classic::Deserialize, Debug, Clone, Hash, PartialEq, Eq,
+    Serialize, Deserialize, Debug, Clone, Hash, PartialEq, Eq,
 )]
 pub struct RuleTransaction {
     merkle_proof: DataTree,
@@ -143,7 +144,7 @@ pub struct RuleTransaction {
 }
 
 impl RuleTransaction {
-    pub fn new<T: classic::Serialize>(
+    pub fn new<T: Serialize>(
         proof: DataTree,
         rule: RecordID,
         rule_digest: Digest,
@@ -177,18 +178,14 @@ impl RuleTransaction {
 }
 
 #[derive(
-    classic::Serialize, classic::Deserialize, Debug, Clone, Hash, PartialEq, Eq,
+    Serialize, Deserialize, Debug, Clone, Hash, PartialEq, Eq,
 )]
 pub enum TobRequest {
     Apply((PayloadForTob, BlsSigInfo)),
 }
 
-unsafe impl Send for TobRequest {}
-unsafe impl Sync for TobRequest {}
-impl classic::Message for TobRequest {}
-
 #[derive(
-    classic::Serialize, classic::Deserialize, Debug, Clone, Hash, PartialEq, Eq,
+    Serialize, Deserialize, Debug, Clone, Hash, PartialEq, Eq,
 )]
 pub struct PayloadForTob {
     rule_record_id: String,
@@ -225,19 +222,3 @@ impl PayloadForTob {
         &self.output
     }
 }
-
-// pub fn corenode_bls_sign(payload: &PayloadForTob) -> {
-//     let d = drop::crypto::hash(payload).unwrap();
-
-// }
-
-#[derive(
-    classic::Serialize, classic::Deserialize, Debug, Clone, Hash, PartialEq, Eq,
-)]
-pub enum TobResponse {
-    Result(String),
-}
-
-unsafe impl Send for TobResponse {}
-unsafe impl Sync for TobResponse {}
-impl classic::Message for TobResponse {}
