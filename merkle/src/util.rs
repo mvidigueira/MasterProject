@@ -73,6 +73,19 @@ pub fn get_is_close_fn(my_d: Digest, mut d_list: Vec<Digest>) -> impl Fn([u8; 32
 mod tests {
     use super::*;
 
+    #[inline]
+    pub fn clear_bits_to_end(arr: &mut [u8; 32], start_index: u8) {
+        for i in start_index as u32..((start_index as u32/8)+1)*8 {
+            set_bit(arr, i as u8, false);
+        }
+        if ((start_index/8 + 1) as usize) < arr.len() {
+            for i in ((start_index / 8) + 1) as usize..arr.len() {
+                arr[i] = 0u8;
+            }
+        }
+    }
+
+
     #[test]
     fn test_bit() {
         let u = &mut [0 as u8; 32];

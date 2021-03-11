@@ -167,7 +167,7 @@ where
     K: Serialize + Clone + Eq,
     V: Serialize + Clone,
 {
-    root: Box<Node<K, V>>,
+    root: Node<K, V>,
 }
 
 // Special trick to have serde deserialize call a finalize hook at the end.
@@ -197,7 +197,7 @@ where
                     return Err(de::Error::custom("tree leaves do not obey hash position requirements"));
                 }
                 td.root.update_cache_recursive();
-                Ok(Tree{ root: Box::new(td.root) })
+                Ok(Tree{ root: td.root })
             }
         }
     }
@@ -219,7 +219,7 @@ where
     /// let mut tree: Tree<&str, i32> = Tree::new();
     /// ```
     pub fn new() -> Self {
-        Tree { root: Box::new(Node::default()) }
+        Tree { root: Node::default() }
     }
 
     /// Returns a reference to the value corresponding to the key.
@@ -321,10 +321,10 @@ where
         Q: Serialize + Eq,
     {
         let mut n = Node::default();
-        std::mem::swap(&mut n, self.root.as_mut());
+        std::mem::swap(&mut n, &mut self.root);
 
         let (v, n) = n.remove(k, 0, 0);
-        *self.root = n;
+        self.root = n;
         v
     }
 
@@ -375,7 +375,7 @@ where
     {
         match self.root.get_proof_single(k, 0) {
             Err(r) => Err(r),
-            Ok(n) => Ok(Tree { root: Box::new(n) }),
+            Ok(n) => Ok(Tree { root: n }),
         }
     }
 
@@ -434,7 +434,7 @@ where
     /// assert_eq!(false, validator.validate(&more_recent_proof));
     /// ```
     pub fn get_validator(&self) -> Validator<K, V> {
-        Tree{ root: Box::new(Placeholder::new(self.root.hash()).into()) }
+        Tree{ root: Placeholder::new(self.root.hash()).into() }
     }
 
     /// Returns the `Digest` corresponding to the root of the Tree.
@@ -481,13 +481,13 @@ where
             return Err(MerkleError::IncompatibleTrees);
         }
 
-        match (self.root.as_mut(), other.root.as_ref()) {
+        match (&mut self.root, &other.root) {
             (Node::Placeholder(_), Node::Placeholder(_)) => (),
             (Node::Placeholder(_), n) => {
-                *self.root = n.clone();
+                self.root = n.clone();
             },
             (a, b) => {
-                a.merge_unchecked(b);
+                a.merge_unchecked(&b);
             },
         }
 
@@ -582,17 +582,17 @@ where
         Q: Serialize + Eq,
     {
         let mut n = Node::default();
-        std::mem::swap(&mut n, self.root.as_mut());
+        std::mem::swap(&mut n, &mut self.root);
 
-        *self.root = n.extend_knowledge(k, new_count, &proof.root, 0)
+        self.root = n.extend_knowledge(k, new_count, &proof.root, 0)
     }
 
     pub fn insert_with_count(&mut self, k: K, v: V, count: usize) -> Option<V> {
         let mut n = Node::default();
-        std::mem::swap(&mut n, self.root.as_mut());
+        std::mem::swap(&mut n, &mut self.root);
 
         let (v, n) = n.insert(k, v, count, 0);
-        self.root = Box::new(n);
+        self.root = n;
         v
     }
 
@@ -607,9 +607,9 @@ where
         F: Fn([u8; 32], usize) -> bool,
     {
         let mut n = Node::default();
-        std::mem::swap(&mut n, self.root.as_mut());
+        std::mem::swap(&mut n, &mut self.root);
 
-        *self.root = n.replace_with_placeholder(k, min_count, is_close, 0);
+        self.root = n.replace_with_placeholder(k, min_count, is_close, 0);
     }
 
     pub fn get_proof_with_placeholder<Q: ?Sized>(
@@ -622,7 +622,7 @@ where
     {
         match self.root.get_proof_single_with_placeholder(k, 0) {
             Err(r) => Err(r),
-            Ok(n) => Ok(Tree { root: Box::new(n) }),
+            Ok(n) => Ok(Tree { root: n }),
         }
     }
 }

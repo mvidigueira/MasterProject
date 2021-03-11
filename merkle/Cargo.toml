@@ -8,6 +8,6 @@ edition = "2018"
 
 [dependencies]
 #drop = { path = "/home/manuel/Documents/M4/rust_playground/drop" }
-drop = { git = "https://github.com/Distributed-EPFL/drop", branch = "feature/io" }
+drop = { git = "https://github.com/Distributed-EPFL/drop", branch = "feature/refactor" }
 serde = { version = "1.0", features = ["derive"] }
-bincode = "1.2.1"
+bincode = "~1.3"
