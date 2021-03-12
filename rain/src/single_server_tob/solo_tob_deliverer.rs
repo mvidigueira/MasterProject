@@ -1,5 +1,5 @@
 use drop::crypto::key::exchange::{Exchanger};
-use drop::net::{TcpConnector, Connector, DirectoryInfo};
+use drop::net::{TcpConnector, Connector, DirectoryInfo, ReceiveError};
 use std::pin::Pin;
 
 use crate::corenode::TobRequest;
@@ -61,16 +61,24 @@ impl TobDeliverer {
                         }
                         a = connection.receive::<TobRequest>().fuse() => {
                             match a {
-                                Err(_) => {
-                                    error!("TobRequest receiving failed");
-                                    continue;
+                                Err(e) => {
+                                    match e {
+                                        ReceiveError::CorruptedReceive{..} => {
+                                            error!("TobRequest receiving failed and connection is broken");
+                                            break;
+                                        }
+                                        a => {
+                                            error!("TobRequest receiving failed: {:?}", a);
+                                            continue;
+                                        }
+                                    }
                                 }
                                 Ok(req) => {
+                                    info!("Tob request received");
                                     if let Err(_) = tx.send(req).await {
                                         error!("error sending request, receiver dropped");
                                         return;
                                     }
-                                    info!("Tob request received");
                                 }
                             }
                         }

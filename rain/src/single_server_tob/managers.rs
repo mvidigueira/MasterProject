@@ -93,7 +93,10 @@ where
 {
     pub async fn run(mut self) -> Result<(), TobServerError> {
         while let Some(txr) = self.q_rx.recv().await {
-            self.connection.send(&txr).await?;
+            error!("Sending message");
+            if let Err(e) = self.connection.send(&txr).await {
+                error!("Error sending: {:?}", e);
+            }
         }
         self.connection.close().await?;
         info!("End of write connection");

@@ -484,7 +484,7 @@ where
             info!("pushed notification");
             self.notifications.push(w);
         }
-
+  
         r
     }
 
@@ -508,6 +508,7 @@ where
 
         // TODO: check that range is good (+- 1)
         info!("lower_limit + 2: {}", lower_limit + 2);
+        info!("touches vector: {:?}", &self.touches);
         for i in 1..lower_limit + 2  {
             let l = &self.touches[i];
             info!("touches: {:?}", l);

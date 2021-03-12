@@ -272,7 +272,7 @@ impl ClientRequestHandler {
         info!("Acquired lock");
         let w = guard.subscribe(records.clone(), since);
         drop(guard);
-        info!("Successfully subscribed!");
+        info!("Successfully subscribed checked for subscripti!");
 
         w.notified().await;
         
@@ -633,6 +633,7 @@ where
                         req.output().iter().map(|x| x.0.clone()).collect();
 
                     let mut tree_guard = self.data.write().await;
+                    info!("lock acquired for modification");
 
                     if !tree_guard
                         .consistent_given_records(req.proof(), &touched_records)
@@ -655,6 +656,8 @@ where
                             Touch::Read => (),
                         }
                     }
+
+                    info!("Pushing history");
 
                     tree_guard.push_history();
 
