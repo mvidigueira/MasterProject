@@ -268,8 +268,10 @@ impl ClientRequestHandler {
         records: Vec<RecordID>,
         since: usize,
     ) -> Result<(), CoreNodeError> {
+
         let mut guard = data.write().await;
         info!("Acquired lock");
+        // change this to be lock free atomic (mpsc queue);
         let w = guard.subscribe(records.clone(), since);
         drop(guard);
         info!("Successfully subscribed checked for subscripti!");
@@ -694,7 +696,7 @@ mod test {
 
     use rand::thread_rng;
 
-    use crate::single_server_tob::TobDeliverer;
+    use crate::tob::TobDeliverer;
     use tracing::trace_span;
     use tracing_futures::Instrument;
 

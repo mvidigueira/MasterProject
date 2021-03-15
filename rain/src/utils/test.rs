@@ -9,8 +9,8 @@ use crate::corenode::{
 };
 use rand::{prelude::SliceRandom, thread_rng};
 
-use crate::single_server_tob::TobDeliverer;
-use crate::single_server_tob::TobServer;
+use crate::tob::TobDeliverer;
+use crate::tob::TobServer;
 
 use drop::crypto::key::exchange::{
     Exchanger, KeyPair as CommKeyPair, PublicKey as CommPubKey,
