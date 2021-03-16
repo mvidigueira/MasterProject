@@ -274,7 +274,7 @@ impl ClientRequestHandler {
         // change this to be lock free atomic (mpsc queue);
         let w = guard.subscribe(records.clone(), since);
         drop(guard);
-        info!("Successfully subscribed checked for subscripti!");
+        info!("Successfully subscribed checked for subscription!");
 
         w.notified().await;
         
@@ -694,9 +694,9 @@ mod test {
     // use test::Bencher;
     // use wasm_common_bindings::{ContextLedger, Ledger};
 
-    use rand::thread_rng;
+    use rand::prelude::*;
 
-    use crate::tob::TobDeliverer;
+    use crate::tob::SoloTobDeliverer;
     use tracing::trace_span;
     use tracing_futures::Instrument;
 
@@ -713,7 +713,7 @@ mod test {
         let mut rng = thread_rng();
         let bls_kp = BlsKeypair::new(&mut rng, &params);
 
-        let deliverer = TobDeliverer::new(
+        let deliverer = SoloTobDeliverer::new(
             Exchanger::random(),
             fake_tob_info,
         )

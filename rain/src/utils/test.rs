@@ -7,10 +7,10 @@ use crate::corenode::{
     CoreNodeInfo, DataTree, PayloadForTob, Prefix, RuleTransaction,
     SystemConfig,
 };
-use rand::{prelude::SliceRandom, thread_rng};
+use rand::prelude::*;
 
-use crate::tob::TobDeliverer;
-use crate::tob::TobServer;
+use crate::tob::SoloTobDeliverer;
+use crate::tob::SoloTobServer;
 
 use drop::crypto::key::exchange::{
     Exchanger, KeyPair as CommKeyPair, PublicKey as CommPubKey,
@@ -206,8 +206,7 @@ impl CoreNodeConfig {
 
     pub fn random() -> Self {
         let params = BlsParams::new("some publicly known string".as_bytes());
-        let mut rng = thread_rng();
-        let bls_kp = BlsKeypair::new(&mut rng, &params);
+        let bls_kp = BlsKeypair::new(&mut thread_rng(), &params);
 
         Self {
             user_addr: next_test_ip4(),
@@ -265,7 +264,7 @@ pub async fn setup_corenode<I: Into<Prefix>>(
     server_addr: SocketAddr,
     comm_kp: CommKeyPair,
     bls_kp: BlsKeypair,
-    tob_deliverer: TobDeliverer,
+    tob_deliverer: SoloTobDeliverer,
     corenodes_info: SystemConfig<Arc<CoreNodeInfo>>,
     dt: DataTree,
     h_len: usize,
@@ -301,10 +300,10 @@ pub async fn setup_corenode<I: Into<Prefix>>(
 pub async fn setup_single_server_tob_deliverers<T: TobNodeConfig>(
     observers: &Vec<T>,
     tob_info: DirectoryInfo,
-) -> Vec<TobDeliverer> {
+) -> Vec<SoloTobDeliverer> {
     let mut v = vec![];
     for observer in observers.iter() {
-        let deliverer = TobDeliverer::new(
+        let deliverer = SoloTobDeliverer::new(
             Exchanger::new(observer.comm_kp().clone()),
             tob_info,
         )
@@ -321,7 +320,7 @@ pub async fn setup_single_server_tob<T: TobNodeConfig>(
     observer_nodes: &Vec<T>,
     tob_nodes: &Vec<T>,
     tob_recipients: usize,
-) -> (Sender<()>, JoinHandle<()>, Vec<TobDeliverer>) {
+) -> (Sender<()>, JoinHandle<()>, Vec<SoloTobDeliverer>) {
     assert_eq!(tob_nodes.len(), 1);
 
     let tob_config = &tob_nodes[0];
@@ -339,7 +338,7 @@ pub async fn setup_single_server_tob<T: TobNodeConfig>(
         })
         .collect();
 
-    let (tob_server, exit_tx) = TobServer::new(
+    let (tob_server, exit_tx) = SoloTobServer::new(
         tob_config.user_addr(),
         tob_config.tob_addr(),
         Exchanger::new(tob_config.comm_kp().clone()),
@@ -365,7 +364,7 @@ pub async fn setup_tob(
     let tob_info: DirectoryInfo = (exchanger.keypair().public().clone(), user_addr).into();
 
     let (tob_server, exit_tx) =
-        TobServer::new(user_addr, tob_addr, exchanger, observers)
+        SoloTobServer::new(user_addr, tob_addr, exchanger, observers)
             .await
             .expect("tob server creation failed");
 

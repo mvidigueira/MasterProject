@@ -83,7 +83,7 @@ impl TobServer {
         loop {
             select! {
                 _ = exit => {
-                    info!("directory server exiting...");
+                    info!("tob server exiting...");
                     let _ = self.ucm_exit.send(());
                     return Ok(());
                 }
@@ -95,7 +95,6 @@ impl TobServer {
                             for i in 0..self.num_observers {
                                 let _ = self.outgoing_messages.send((i, m.clone())).await;
                             }
-                            drop(m);
                         }
                     } 
                 }

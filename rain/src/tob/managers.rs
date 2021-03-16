@@ -255,15 +255,15 @@ where
                             info!("directory server exiting...");
                             return Ok(());
                         }
-                        Some((pk, m)) => {
-                            match self.write_connections.entry(pk) {
+                        Some((index, m)) => {
+                            match self.write_connections.entry(index) {
                                 Entry::Vacant(_) => {
-                                    error!("cannot send message to node {:?}: connection doesn't exist", pk);
+                                    error!("cannot send message to node {:?}: connection doesn't exist", index);
                                 },
                                 Entry::Occupied(mut e) => {
                                     match e.get_mut().send(m).await {
                                         Err(_) => {
-                                            error!("cannot send message to node {:?}: connection has been closed", pk);
+                                            error!("cannot send message to node {:?}: connection has been closed", index);
                                             e.remove_entry();
                                         }
                                         _ => (),
@@ -344,7 +344,7 @@ where
                     Ok(i) => i,
                     Err(_) => unreachable!(),
                 };
-                self.write_connections.insert(i, tx);
+                self.write_connections.insert(i+self.validator_nodes.len(), tx);
             } else {
                 let _ = connection.close().await;
             }

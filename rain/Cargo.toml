@@ -14,7 +14,6 @@ llvm = []
 native = []
 
 [dependencies]
-macros = { git = "https://github.com/Distributed-EPFL/drop", branch= "feature/io" }
 merkle = { path = "../merkle" }
 wasm_common_bindings = { path="common" }
 rain_wasmtime_contract = { path = "../rules_playtest/rain_wasmtime_contract" }
@@ -25,7 +24,7 @@ tracing-futures = "0.2.3"
 bincode = "1.3.1"
 log = "0.4"
 base64 = "0.11.0"
-rand = "0.7.3"
+rand = "0.7"
 tester = "0.7.0"
 wasmer = "1.0.0-rc"
 wasmer-compiler-llvm = "1.0.0-rc"
@@ -33,7 +32,6 @@ wasmer-compiler-singlepass = "1.0.0-rc"
 wasmer-compiler-cranelift = "1.0.0-rc"
 wasmer-engine-native = "1.0.0-rc1"
 bls_amcl = "0.7.0"
-hbbft = "0.1.1"
 thiserror = "1.0.24"
 tokio-stream = "0.1.4"
 
@@ -45,6 +43,10 @@ features = ["net"]
 [dependencies.tokio]
 version = "1.3.0"
 features = ["rt-multi-thread"]
+
+[dependencies.hbbft]
+path = "../../hbbft"
+#git = "https://github.com/mvidigueira/hbbft.git"
 
 [dev-dependencies]
 tracing-subscriber = "*"

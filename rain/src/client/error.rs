@@ -1,5 +1,4 @@
 use drop::net::{ConnectError, ReceiveError, SendError};
-use macros::error;
 use merkle::MerkleError;
 use thiserror::Error;
 
