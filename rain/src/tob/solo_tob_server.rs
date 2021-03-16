@@ -2,6 +2,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use drop::crypto::key::exchange::{Exchanger, PublicKey};
+use drop::net::DirectoryInfo;
 
 use crate::corenode::{TobRequest};
 
@@ -42,11 +43,12 @@ impl TobServer {
 
         let (ucm, request_stream, ucm_exit) = UserConnectionManager::new(user_addr, exchanger.clone()).await;
         
+        let our_pk = *exchanger.keypair().public();
         let (ncm, incoming_messages, outgoing_messages) = NodeConnectionManager::new(
             tob_addr, 
             exchanger, 
             observers, 
-            vec!(),
+            vec!(DirectoryInfo::from((our_pk, tob_addr))),
         ).await;
         
         task::spawn(
@@ -93,7 +95,10 @@ impl TobServer {
                         Some(request) => {
                             let m = Arc::new(request);
                             for i in 0..self.num_observers {
-                                let _ = self.outgoing_messages.send((i, m.clone())).await;
+                                let _ = self.outgoing_messages.send((
+                                    i+1,    // 1 validator = ids shift by 1
+                                    m.clone()
+                                )).await;
                             }
                         }
                     } 

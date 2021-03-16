@@ -31,23 +31,19 @@ use hbbft::{NetworkInfo, PubKeyMap, Target, thread_rng_hbbft_compat};
 
 
 
-pub struct TobServer {
-    request_stream: mpsc::Receiver<TobRequest>,
-    outgoing_message_stream: mpsc::Sender<(usize, Message<usize>)>,
+pub struct TobDeliverer {
+    _outgoing_message_stream: mpsc::Sender<(usize, Message<usize>)>,
     incoming_message_stream: mpsc::Receiver<(usize, Message<usize>)>,
 
     state_machine: QueueingHoneyBadger<TobRequest, usize, Vec<TobRequest>>,
     first_step: Step<TobRequest, usize>,
     num_nodes: usize,
 
-    ucm_exit: oneshot::Sender<()>,
     exit: oneshot::Receiver<()>,
 }
 
-impl TobServer {
+impl TobDeliverer {
     pub async fn new(
-        user_addr: SocketAddr,
-
         tob_addr: SocketAddr,
         exchanger: Exchanger,
         observers: Vec<(DirectoryInfo, hbbft::crypto::PublicKey)>,
@@ -58,13 +54,11 @@ impl TobServer {
     ) -> Result<(Self, oneshot::Sender<()>), TobServerError> {
         let (tx, rx) = oneshot::channel();
 
-        let (ucm, request_stream, ucm_exit) = UserConnectionManager::new(user_addr, exchanger.clone()).await;
-
         let (ncm, incoming_messages, outgoing_messages) = NodeConnectionManager::new(
             tob_addr, 
             exchanger, 
             observers.iter().map(|x| x.0.public().clone()).collect(), 
-            validators.iter().map(|x| x.0).collect()
+            validators.iter().map(|x| x.0.public().clone()).collect()
         ).await;
 
         task::spawn(
